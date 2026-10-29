@@ -62,13 +62,14 @@ struct RegisterView: View {
     // Security fields
     @State private var pin: String = ""      // Owner PIN
     @State private var passcode: String = "" // Call screening passphrase
+    @State private var messageName: String = "" // Optional custom greeting name
     @State private var agreedToPolicy: Bool = false
     
     @State private var errorMessage: String = ""
     @State private var isLoading: Bool = false
     @State private var successMessage: String = ""
 
-    // FORM VALIDATION: Properly placed at the struct scope level
+    // FORM VALIDATION
     private var isFormValid: Bool {
         !name.isEmpty &&
         !phoneNumber.isEmpty &&
@@ -92,12 +93,12 @@ struct RegisterView: View {
                         Text("Full Name")
                         Text("*").foregroundColor(.red)
                         Spacer()
-                        TextField("Full Name / Username", text: $name)
+                        TextField("Full Name", text: $name)
                             .multilineTextAlignment(.trailing)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
-                    
+                     
                     HStack {
                         Text("Phone Number")
                         Text("*").foregroundColor(.red)
@@ -107,7 +108,7 @@ struct RegisterView: View {
                             .keyboardType(.phonePad)
                             .autocorrectionDisabled()
                     }
-                    
+                     
                     HStack {
                         Text("Email")
                         Text("*").foregroundColor(.red)
@@ -118,7 +119,7 @@ struct RegisterView: View {
                             .keyboardType(.emailAddress)
                             .autocorrectionDisabled()
                     }
-                    
+                     
                     HStack {
                         Text("Password")
                         Text("*").foregroundColor(.red)
@@ -143,7 +144,7 @@ struct RegisterView: View {
                                     searchManager.searchQuery = newValue
                                 }
                         }
-                       
+                         
                         if showAddressSuggestions && !searchManager.searchResults.isEmpty && streetAddress.count > 2 {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Suggested Addresses:")
@@ -185,7 +186,7 @@ struct RegisterView: View {
                         TextField("City", text: $city)
                             .multilineTextAlignment(.trailing)
                     }
-                    
+                     
                     HStack {
                         Text("State")
                         Text("*").foregroundColor(.red)
@@ -193,7 +194,7 @@ struct RegisterView: View {
                         TextField("State / Province", text: $state)
                             .multilineTextAlignment(.trailing)
                     }
-                    
+                     
                     HStack {
                         Text("Zip Code")
                         Text("*").foregroundColor(.red)
@@ -202,7 +203,7 @@ struct RegisterView: View {
                             .multilineTextAlignment(.trailing)
                             .keyboardType(.numberPad)
                     }
-                    
+                     
                     HStack {
                         Text("Country")
                         Spacer()
@@ -214,8 +215,28 @@ struct RegisterView: View {
                 // MARK: - Security & Call Screening
                 Section(
                     header: Text("Security & Call Screening"),
-                    footer: Text("The Owner PIN protects your account settings. The Voice Passcode is spoken by callers to bypass screening. Guardian PIN defaults to 1234 and can be customized in settings.")
+                    footer: Text("The Owner PIN protects your account settings. The Voice Passcode is spoken by callers to bypass screening.")
                 ) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Greeting Name")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("Optional")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        TextField("e.g. Grandma Mary or Leave Blank", text: $messageName)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                        Text("Announced during call screening. Leave blank for default privacy.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 2)
+
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Owner PIN")
@@ -363,6 +384,8 @@ struct RegisterView: View {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        let cleanedMessageName = messageName.trimmingCharacters(in: .whitespaces)
+
         let body: [String: Any] = [
             "name": name.trimmingCharacters(in: .whitespaces),
             "phoneNumber": formattedPhone,
@@ -374,7 +397,8 @@ struct RegisterView: View {
             "zipCode": zipCode.trimmingCharacters(in: .whitespaces),
             "country": country.trimmingCharacters(in: .whitespaces),
             "pin": pin.trimmingCharacters(in: .whitespaces),
-            "passcode": passcode.trimmingCharacters(in: .whitespaces)
+            "passcode": passcode.trimmingCharacters(in: .whitespaces),
+            "messageName": cleanedMessageName.isEmpty ? NSNull() : cleanedMessageName
         ]
 
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)

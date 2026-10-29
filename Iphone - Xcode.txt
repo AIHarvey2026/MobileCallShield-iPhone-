@@ -1,0 +1,4238 @@
+AddContactView
+import SwiftUI
+import Contacts
+import ContactsUI
+
+struct AddContactView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("userId") private var currentUserId: Int = 1
+    
+    @State private var contactName: String = ""
+    @State private var phoneNumber: String = ""
+    @State private var showContactPicker: Bool = false
+    
+    @State private var isSaving: Bool = false
+    @State private var alertMessage: String = ""
+    @State private var showAlert: Bool = false
+    @State private var showingAddContact = false
+
+    var body: some View {
+        Form {
+            Section(header: Text("Contact Information")) {
+                TextField("Contact Name", text: $contactName)
+                TextField("Phone Number", text: $phoneNumber)
+                    #if os(iOS) || os(tvOS) || os(visionOS)
+                    .keyboardType(.phonePad)
+                    #endif
+                 
+                Button(action: {
+                    showContactPicker = true
+                }) {
+                    HStack {
+                        Image(systemName: "person.crop.rectangle.stack.fill")
+                            .foregroundColor(.blue)
+                        Text("Import from Phone Contacts")
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+             
+            Section {
+                Button(action: {
+                    saveContact()
+                }) {
+                    HStack {
+                        Spacer()
+                        if isSaving {
+                            ProgressView()
+                        } else {
+                            Text("Save Trusted Contact")
+                                .fontWeight(.bold)
+                        }
+                        Spacer()
+                    }
+                }
+                .disabled(contactName.isEmpty || phoneNumber.isEmpty || isSaving)
+            }
+        }
+        .navigationTitle("Add Trusted Contact")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showContactPicker) {
+            SystemContactPicker { selectedList in
+                guard let contact = selectedList.first else { return }
+                self.contactName = contact.name
+                self.phoneNumber = contact.phoneNumber
+            } onError: { errorMessage in
+                print("❌ Contact picker error: \(errorMessage)")
+            }
+        }
+        .alert("Status", isPresented: $showAlert) {
+            Button("OK") {
+                if alertMessage.contains("successfully") {
+                    dismiss()
+                }
+            }
+        } message: {
+            Text(alertMessage)
+        }
+    }
+
+    private func saveContact() {
+        isSaving = true
+        
+        // Using your bulk endpoint to save the single contact reliably
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/bulk") else {
+            isSaving = false
+            alertMessage = "Invalid backend URL."
+            showAlert = true
+            return
+        }
+         
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+         
+        let body: [String: Any] = [
+            "userId": currentUserId,
+            "contacts": [
+                [
+                    "name": contactName,
+                    "phone_number": phoneNumber,
+                    "is_guardian": false
+                ]
+            ]
+        ]
+        
+        print("[DEBUG] Sending contacts to URL: \(url)")
+        print("[DEBUG] Payload userId: \(currentUserId)")
+         
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            isSaving = false
+            alertMessage = "Failed to serialize contact data."
+            showAlert = true
+            return
+        }
+         
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                isSaving = false
+                if let error = error {
+                    alertMessage = "Failed to save contact to backend: \(error.localizedDescription)"
+                } else if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                    alertMessage = "Contact added successfully!"
+                } else {
+                    alertMessage = "Server returned an error saving the contact."
+                }
+                showAlert = true
+            }
+        }.resume()
+    }
+}
+
+AddressAutocompleteFind
+import SwiftUI
+import MapKit
+import Combine
+
+class AddressSearchCompleter: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+    private let completer = MKLocalSearchCompleter()
+    @Published var results: [MKLocalSearchCompletion] = []
+    @Published var searchQuery: String = "" {
+        didSet {
+            completer.queryFragment = searchQuery
+        }
+    }
+    
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = .address
+    }
+    
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        self.results = completer.results
+    }
+    
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        print("❌ Address completion error: \(error.localizedDescription)")
+    }
+}
+
+
+AdminDashboardView
+import SwiftUI
+
+struct AdminDashboardView: View {
+    @State private var users: [AdminUser] = []
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String? = nil
+
+    var body: some View {
+        List {
+            if isLoading {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Connecting to server...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text("(Render free instance may take ~30s to wake up)")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                }
+                .padding()
+            } else if let errorMessage = errorMessage {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Connection Failed")
+                        .font(.headline)
+                        .foregroundColor(.red)
+                    Text(errorMessage)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Button("Retry") {
+                        fetchAdminData()
+                    }
+                    .padding(.top, 8)
+                }
+            } else {
+                ForEach(users) { user in
+                    VStack(alignment: .leading) {
+                        Text(user.name)
+                            .font(.headline)
+                        Text(user.phoneNumber)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Admin Panel")
+        .onAppear {
+            fetchAdminData()
+        }
+    }
+
+    private func fetchAdminData() {
+        isLoading = true
+        errorMessage = nil
+
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/admin/users") else {
+            isLoading = false
+            return
+        }
+        
+        print("[DEBUG] Sending contacts to URL: \(url)")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 60.0 // Allow up to 60s for Render container wake-up
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                self.isLoading = false
+
+                if let error = error {
+                    self.errorMessage = error.localizedDescription
+                    print("[ADMIN ERROR]: \(error.localizedDescription)")
+                    return
+                }
+
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                    self.errorMessage = "Server returned an invalid response."
+                    return
+                }
+
+                guard let data = data else {
+                    self.errorMessage = "No data received."
+                    return
+                }
+
+                do {
+                    self.users = try JSONDecoder().decode([AdminUser].self, from: data)
+                } catch {
+                    self.errorMessage = "Failed to parse admin data."
+                    print("[DECODE ERROR]: \(error)")
+                }
+            }
+        }.resume()
+    }
+}
+
+struct AdminUser: Identifiable, Codable {
+    let id: Int
+    let name: String
+    let phoneNumber: String
+}
+
+AllContactsView
+
+import SwiftUI
+import ContactsUI
+
+// MARK: - Sheet Presentation Enum (Only for Contact Picker)
+enum ActiveSheet: Identifiable {
+    case contactPicker
+    
+    var id: Int {
+        return 1
+    }
+}
+
+// MARK: - Remote Trusted Contact Model
+struct RemoteTrustedContact: Identifiable, Codable {
+    let id: Int
+    let name: String
+    let phoneNumbers: [String]
+    var isTrusted: Bool
+    var isPrimary: Bool
+
+    // Formats numbers cleanly as (###) ###-####
+    var displayPhoneNumber: String {
+        let formattedNumbers = phoneNumbers.map { formatPhoneNumber($0) }
+        return formattedNumbers.joined(separator: ", ")
+    }
+
+    private func formatPhoneNumber(_ number: String) -> String {
+        let cleanNumber = number.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+        
+        if cleanNumber.count == 10 {
+            let area = cleanNumber.prefix(3)
+            let prefix = cleanNumber.dropFirst(3).prefix(3)
+            let line = cleanNumber.suffix(4)
+            return "(\(area)) \(prefix)-\(line)"
+        } else if cleanNumber.count == 11 && cleanNumber.hasPrefix("1") {
+            let area = cleanNumber.dropFirst(1).prefix(3)
+            let prefix = cleanNumber.dropFirst(4).prefix(3)
+            let line = cleanNumber.suffix(4)
+            return "(\(area)) \(prefix)-\(line)"
+        }
+        
+        return number
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case phoneNumbers = "phone_numbers"
+        case isTrusted = "is_guardian"
+        case isPrimary = "is_primary"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        id = try container.decode(Int.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        phoneNumbers = try container.decodeIfPresent([String].self, forKey: .phoneNumbers) ?? []
+        
+        isTrusted = try container.decodeIfPresent(Bool.self, forKey: .isTrusted) ?? false
+        isPrimary = try container.decodeIfPresent(Bool.self, forKey: .isPrimary) ?? false
+    }
+}
+
+// MARK: - Trusted Contacts Main View
+struct AllContactsView: View {
+    @EnvironmentObject var session: SessionStore
+    
+    @State private var contacts: [RemoteTrustedContact] = []
+    @State private var isLoading = false
+    @State private var isSyncing = false
+    @State private var errorMessage = ""
+    
+    // Sheet state strictly for the native contact picker
+    @State private var activeSheet: ActiveSheet? = nil
+    
+    @AppStorage("userId") private var currentUserId: Int = 1
+    @AppStorage("hasSyncedPhoneContacts") private var hasSyncedPhoneContacts: Bool = false
+
+    // Computed property to maintain alphabetical order by contact name
+    var sortedContacts: [RemoteTrustedContact] {
+        contacts.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // MARK: Top Action Buttons Section (Add Single & Sync All)
+                Section(header: Text("Actions")) {
+                    HStack(spacing: 24) {
+                        // 1. Add Single Button
+                        Button(action: {
+                            activeSheet = .contactPicker
+                        }) {
+                            Label("Add Single", systemImage: "person.badge.plus")
+                                .font(.subheadline)
+                        }
+
+                        Spacer()
+
+                        // 2. Sync All Button
+                        Button(action: {
+                            syncAllPhoneContacts()
+                        }) {
+                            HStack(spacing: 6) {
+                                Label(hasSyncedPhoneContacts ? "Synced" : "Sync All", systemImage: hasSyncedPhoneContacts ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+                                    .font(.subheadline)
+                                if isSyncing {
+                                    ProgressView()
+                                }
+                            }
+                        }
+                        .disabled(isSyncing)
+                    }
+                    .padding(.vertical, 4)
+                }
+                
+                // MARK: Main Section - Trusted Contacts (Alphabetical)
+                Section(header: Text("Trusted Contacts")) {
+                    if isLoading {
+                        HStack {
+                            Spacer()
+                            ProgressView("Loading contacts...")
+                            Spacer()
+                        }
+                    } else if !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                    } else if sortedContacts.isEmpty {
+                        Text("No trusted contacts found.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(sortedContacts) { contact in
+                            HStack(alignment: .center, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(contact.name)
+                                        .font(.headline)
+                                        .lineLimit(1)
+                                    Text(contact.displayPhoneNumber.isEmpty ? "No phone number" : contact.displayPhoneNumber)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                }
+                                
+                                Spacer(minLength: 4)
+                                
+                                HStack(spacing: 12) {
+                                    // Guardian Toggle
+                                    VStack(spacing: 2) {
+                                        Text("Guardian")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Toggle("Guardian", isOn: Binding(
+                                            get: { contact.isTrusted },
+                                            set: { newValue in
+                                                if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+                                                    contacts[index].isTrusted = newValue
+                                                    
+                                                    // SAFETY RULE: If Guardian is turned off, Primary must also turn off automatically
+                                                    if !newValue && contacts[index].isPrimary {
+                                                        contacts[index].isPrimary = false
+                                                    }
+                                                }
+                                                updateGuardianStatus(contactId: contact.id, isGuardian: newValue, userId: session.userId)
+                                            }
+                                        ))
+                                        .labelsHidden()
+                                        .toggleStyle(SwitchToggleStyle(tint: .blue))
+                                    }
+                                    
+                                    // Primary Toggle (With Safety Check)
+                                    VStack(spacing: 2) {
+                                        Text("Primary")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Toggle("Primary", isOn: Binding(
+                                            get: { contact.isPrimary },
+                                            set: { newValue in
+                                                if newValue {
+                                                    // SAFETY RULE: Must be a Guardian first. Auto-enable Guardian if needed.
+                                                    if !contact.isTrusted {
+                                                        if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+                                                            contacts[index].isTrusted = true
+                                                        }
+                                                        updateGuardianStatus(contactId: contact.id, isGuardian: true, userId: session.userId)
+                                                    }
+                                                    
+                                                    // Set this contact as primary and clear others locally
+                                                    for index in contacts.indices {
+                                                        contacts[index].isPrimary = (contacts[index].id == contact.id)
+                                                    }
+                                                    updatePrimaryStatus(contactId: contact.id, userId: session.userId)
+                                                } else {
+                                                    if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+                                                        contacts[index].isPrimary = false
+                                                    }
+                                                }
+                                            }
+                                        ))
+                                        .labelsHidden()
+                                        .toggleStyle(SwitchToggleStyle(tint: .orange))
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Trusted Contacts")
+            .navigationBarTitleDisplayMode(.inline)
+            // PRESENT CONTACT PICKER SHEET
+            .sheet(item: $activeSheet) { _ in
+                ContactPicker { name, phoneNumber in
+                    handleSingleContactSelection(name: name, phoneNumber: phoneNumber)
+                }
+            }
+            .onAppear {
+                fetchContacts()
+            }
+        }
+    }
+
+    // MARK: - Isolated Workflow Functions
+
+    private func handleSingleContactSelection(name: String, phoneNumber: String) {
+        activeSheet = nil
+        uploadTrustedContact(name: name, phoneNumber: phoneNumber, userId: session.userId) { success in
+            if success {
+                fetchContacts()
+            }
+        }
+    }
+    
+    private func syncAllPhoneContacts() {
+        isSyncing = true
+        ContactSyncManager.syncDeviceContacts(userId: session.userId) { success, message in
+            isSyncing = false
+            if success {
+                hasSyncedPhoneContacts = true
+                fetchContacts()
+            }
+        }
+    }
+
+    private func fetchContacts() {
+        isLoading = true
+        errorMessage = ""
+        
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/\(session.userId)") else {
+            isLoading = false
+            return
+        }
+        
+        URLSession.shared.dataTask(with: url) { data, _, error in
+            DispatchQueue.main.async { isLoading = false }
+            
+            if let error = error {
+                DispatchQueue.main.async { errorMessage = "Error: \(error.localizedDescription)" }
+                return
+            }
+            
+            guard let data = data else {
+                DispatchQueue.main.async { errorMessage = "No data returned." }
+                return
+            }
+            
+            do {
+                let decoded = try JSONDecoder().decode([RemoteTrustedContact].self, from: data)
+                DispatchQueue.main.async { contacts = decoded }
+            } catch {
+                if let errorDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let serverError = errorDict["error"] as? String {
+                    DispatchQueue.main.async { errorMessage = "Server: \(serverError)" }
+                } else {
+                    DispatchQueue.main.async { errorMessage = "Failed to parse contacts." }
+                }
+            }
+        }.resume()
+    }
+
+    private func updateGuardianStatus(contactId: Int, isGuardian: Bool, userId: Int) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/\(contactId)/guardian") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["is_guardian": isGuardian, "userId": userId])
+        URLSession.shared.dataTask(with: request).resume()
+    }
+
+    private func updatePrimaryStatus(contactId: Int, userId: Int) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/guardians/\(userId)/primary/\(contactId)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        URLSession.shared.dataTask(with: request).resume()
+    }
+
+    private func uploadTrustedContact(name: String, phoneNumber: String, userId: Int, completion: @escaping (Bool) -> Void) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/bulk") else {
+            completion(false)
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let payload: [String: Any] = [
+            "userId": userId,
+            "contacts": [["name": name, "phone_numbers": [phoneNumber], "is_guardian": false]]
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            DispatchQueue.main.async {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                completion(statusCode == 200 || statusCode == 201)
+            }
+        }.resume()
+    }
+}
+
+// MARK: - Native Contact Picker Wrapper
+struct ContactPicker: UIViewControllerRepresentable {
+    var onContactSelected: (String, String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> CNContactPickerViewController {
+        let picker = CNContactPickerViewController()
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, CNContactPickerDelegate {
+        var parent: ContactPicker
+        init(_ parent: ContactPicker) { self.parent = parent }
+
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
+            let name = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
+            let phone = contact.phoneNumbers.first?.value.stringValue ?? ""
+            parent.onContactSelected(name, phone)
+            parent.dismiss()
+        }
+
+        func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
+            parent.dismiss()
+        }
+    }
+}
+
+AppSettingsView
+
+import SwiftUI
+
+struct AppSettingsView: View {
+    @AppStorage("loggedInUserId") private var loggedInUserId: Int = 1
+    
+    // Guardian Shield State
+    @State private var isShieldEnabled: Bool = true
+    @State private var showingShieldPinAlert: Bool = false
+    @State private var togglePinInput: String = ""
+    @State private var pendingShieldState: Bool = true
+    
+    // Change PIN State
+    @State private var showingChangePinAlert: Bool = false
+    @State private var currentPinInput: String = ""
+    @State private var newPinInput: String = ""
+    @State private var confirmNewPinInput: String = ""
+    
+    // Change Passcode Phrase State
+    @State private var showingPasscodeAlert: Bool = false
+    @State private var passcodePinInput: String = ""
+    @State private var newPasscodePhrase: String = ""
+    
+    // Status Messages
+    @State private var errorMessage: String?
+    @State private var successMessage: String?
+    @State private var isLoading: Bool = false
+
+    var body: some View {
+        Form {
+            // 1. Guardian Shield Toggle
+            Section(
+                header: Text("Shield Controls"),
+                footer: Text("No Guardian assigned: Account owner can turn off Guardian Shield. If Guardians, only primary Guardian can turn off Guardian Shield.")
+            ) {
+                Toggle("Guardian Shield Active", isOn: Binding(
+                    get: { isShieldEnabled },
+                    set: { newValue in
+                        pendingShieldState = newValue
+                        if !newValue {
+                            // Instantly call the backend to turn it off without showing the alert popup
+                            updateShieldStatus(enabled: false, pin: "")
+                        } else {
+                            updateShieldStatus(enabled: true, pin: "")
+                        }
+                    }
+                ))
+            }
+             
+            // 2. Security PIN Management Section
+            Section(
+                header: Text("Security Management"),
+                footer: Text("You must enter your current PIN to set a new security PIN.")
+            ) {
+                Button(action: {
+                    showingChangePinAlert = true
+                }) {
+                    HStack {
+                        Image(systemName: "key.fill")
+                            .foregroundColor(.blue)
+                        Text("Change Owner PIN")
+                            .foregroundColor(.primary)
+                    }
+                }
+            }
+
+            // 3. Call Screening Passcode Section
+            Section(
+                header: Text("Owner Passcode"),
+                footer: Text("Visitors must type the exact word or phrase to pass call screening.")
+            ) {
+                Button(action: {
+                    showingPasscodeAlert = true
+                }) {
+                    HStack {
+                        Image(systemName: "textformat")
+                            .foregroundColor(.blue)
+                        Text("Change Passcode Phrase")
+                            .foregroundColor(.primary)
+                    }
+                }
+            }
+
+            // 4. Status Alerts
+            if let error = errorMessage {
+                Section {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                }
+            }
+             
+            if let success = successMessage {
+                Section {
+                    Text(success)
+                        .foregroundColor(.green)
+                        .font(.caption)
+                }
+            }
+        }
+        .navigationTitle("Shield Settings")
+         
+        // --- ALERT 1: Enter PIN to Disable Shield ---
+        .alert("Disable Guardian Shield", isPresented: $showingShieldPinAlert) {
+            SecureField("Enter Current PIN", text: $togglePinInput)
+                .keyboardType(.numberPad)
+            Button("Confirm") {
+                updateShieldStatus(enabled: pendingShieldState, pin: togglePinInput)
+                togglePinInput = ""
+            }
+            Button("Cancel", role: .cancel) {
+                pendingShieldState = isShieldEnabled
+                togglePinInput = ""
+            }
+        } message: {
+            Text("Please enter your current Guardian PIN to turn off protection.")
+        }
+         
+        // --- ALERT 2: Change PIN Dialog ---
+        .alert("Change Owner PIN", isPresented: $showingChangePinAlert) {
+            SecureField("Current PIN", text: $currentPinInput)
+                .keyboardType(.numberPad)
+            SecureField("New 4-Digit PIN", text: $newPinInput)
+                .keyboardType(.numberPad)
+            SecureField("Confirm New PIN", text: $confirmNewPinInput)
+                .keyboardType(.numberPad)
+                 
+            Button("Update PIN") {
+                validateAndUpdatePin()
+            }
+            Button("Cancel", role: .cancel) {
+                clearPinInputs()
+            }
+        } message: {
+            Text("Enter your current PIN and your new PIN.")
+        }
+
+        // --- ALERT 3: Change Passcode Phrase Dialog ---
+        .alert("Change Passcode Phrase", isPresented: $showingPasscodeAlert) {
+            SecureField("Owner PIN", text: $passcodePinInput)
+                .keyboardType(.numberPad)
+            TextField("New Word or Phrase", text: $newPasscodePhrase)
+                .textInputAutocapitalization(.words)
+            
+            Button("Update Passcode") {
+                updatePasscodeOnBackend(pin: passcodePinInput, passcode: newPasscodePhrase)
+                passcodePinInput = ""
+                newPasscodePhrase = ""
+            }
+            Button("Cancel", role: .cancel) {
+                passcodePinInput = ""
+                newPasscodePhrase = ""
+            }
+        } message: {
+            Text("Enter your Owner PIN and the new word or phrase visitors must speak.")
+        }
+    }
+
+    private func validateAndUpdatePin() {
+        guard !currentPinInput.isEmpty else {
+            errorMessage = "Current PIN is required."
+            clearPinInputs()
+            return
+        }
+         
+        guard newPinInput.count >= 4 else {
+            errorMessage = "New PIN must be at least 4 digits."
+            clearPinInputs()
+            return
+        }
+         
+        guard newPinInput == confirmNewPinInput else {
+            errorMessage = "New PINs do not match."
+            clearPinInputs()
+            return
+        }
+         
+        updatePinOnBackend(current: currentPinInput, new: newPinInput)
+        clearPinInputs()
+    }
+     
+    private func clearPinInputs() {
+        currentPinInput = ""
+        newPinInput = ""
+        confirmNewPinInput = ""
+    }
+
+    private func updateShieldStatus(enabled: Bool, pin: String) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/user/toggle-shield") else { return }
+         
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+         
+        let body: [String: Any] = [
+            "userId": loggedInUserId,
+            "isEnabled": enabled,
+            "pin": pin
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            DispatchQueue.main.async {
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    isShieldEnabled = enabled
+                    successMessage = "Shield status updated successfully."
+                    errorMessage = nil
+                } else {
+                    isShieldEnabled = !enabled
+                    errorMessage = "Incorrect PIN or server error."
+                    successMessage = nil
+                }
+            }
+        }.resume()
+    }
+     
+    private func updatePinOnBackend(current: String, new: String) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/user/update-pin") else { return }
+         
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+         
+        let body: [String: Any] = [
+            "userId": loggedInUserId,
+            "currentPin": current,
+            "newPin": new
+        ]
+        
+        print("[DEBUG] Payload userId: \(loggedInUserId)")
+        
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            DispatchQueue.main.async {
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    successMessage = "Guardian PIN changed successfully!"
+                    errorMessage = nil
+                } else {
+                    errorMessage = "Failed to update PIN. Please check your current PIN."
+                    successMessage = nil
+                }
+            }
+        }.resume()
+    }
+
+    private func updatePasscodeOnBackend(pin: String, passcode: String) {
+        guard !pin.isEmpty, !passcode.isEmpty else {
+            errorMessage = "PIN and new passcode phrase are required."
+            return
+        }
+        
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/settings/update-passcode") else { return }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "userId": loggedInUserId,
+            "pin": pin,
+            "newPasscode": passcode
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            DispatchQueue.main.async {
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    successMessage = "Passcode phrase updated successfully!"
+                    errorMessage = nil
+                } else {
+                    errorMessage = "Failed to update passcode. Check your Owner PIN."
+                    successMessage = nil
+                }
+            }
+        }.resume()
+    }
+}
+
+#Preview {
+    NavigationStack {
+        AppSettingsView()
+    }
+}
+
+
+CallHistoryView
+
+import SwiftUI
+import AVFoundation
+import Foundation
+import Combine
+
+// MARK: - Call Log Model
+struct CallLog: Identifiable, Codable {
+    let id: Int
+    let userId: Int?
+    let callerPhone: String
+    let calledPhone: String
+    let status: String
+    let voicemailUrl: String?
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case callerPhone = "caller_phone"
+        case calledPhone = "called_phone"
+        case status
+        case voicemailUrl = "voicemail_url"
+        case createdAt = "created_at"
+    }
+}
+
+// MARK: - View Model Service
+class TrustedContactService: ObservableObject {
+    @Published var callLogs: [CallLog] = []
+    @Published var isLoading: Bool = false
+
+    func fetchCallLogs(userId: Int) {
+        isLoading = true
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/call-logs/\(userId)") else {
+            isLoading = false
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { data, response, error in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                guard let data = data, error == nil else { return }
+                
+                let decoder = JSONDecoder()
+                if let decodedLogs = try? decoder.decode([CallLog].self, from: data) {
+                    self.callLogs = decodedLogs
+                }
+            }
+        }.resume()
+    }
+}
+
+// MARK: - Call History View
+struct CallHistoryView: View {
+    @ObservedObject private var service = TrustedContactService()
+    let currentUserId: Int = 1
+    
+    // State for managing in-app audio playback
+    @State private var audioPlayer: AVPlayer?
+    @State private var playingUrlString: String?
+
+    var body: some View {
+        List {
+            if service.isLoading && service.callLogs.isEmpty {
+                ProgressView()
+            } else if service.callLogs.isEmpty {
+                Text("No call activity logged yet.")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(service.callLogs) { log in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(log.callerPhone)
+                                .font(.headline)
+                            Spacer()
+                            StatusBadge(status: log.status)
+                        }
+                       
+                        Text("Called: \(log.calledPhone)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+
+                        // In-App Voicemail Audio Player
+                        if let urlString = log.voicemailUrl, let url = URL(string: urlString) {
+                            Button(action: {
+                                togglePlayback(for: urlString, url: url)
+                            }) {
+                                HStack {
+                                    Image(systemName: playingUrlString == urlString ? "stop.circle.fill" : "play.circle.fill")
+                                        .font(.title3)
+                                        .foregroundColor(.green)
+                                    Text(playingUrlString == urlString ? "Stop Voicemail" : "Play Voicemail")
+                                        .font(.caption)
+                                        .bold()
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                       
+                        Text(log.createdAt)
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .onDelete { indexSet in
+                    for index in indexSet {
+                        let log = service.callLogs[index]
+                        deleteCallLog(logId: log.id)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Call History")
+        .refreshable {
+            service.fetchCallLogs(userId: currentUserId)
+        }
+        .onAppear {
+            service.fetchCallLogs(userId: currentUserId)
+        }
+        .onDisappear {
+            audioPlayer?.pause()
+        }
+    }
+
+    private func togglePlayback(for urlString: String, url: URL) {
+        if playingUrlString == urlString {
+            audioPlayer?.pause()
+            playingUrlString = nil
+        } else {
+            audioPlayer?.pause()
+            let playerItem = AVPlayerItem(url: url)
+            audioPlayer = AVPlayer(playerItem: playerItem)
+            audioPlayer?.play()
+            playingUrlString = urlString
+        }
+    }
+
+    private func deleteCallLog(logId: Int) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/call-logs/\(logId)") else { return }
+         
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            DispatchQueue.main.async {
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    service.callLogs.removeAll { $0.id == logId }
+                }
+            }
+        }.resume()
+    }
+}
+
+struct StatusBadge: View {
+    let status: String
+
+    var body: some View {
+        Text(formattedStatus)
+            .font(.caption2)
+            .bold()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(badgeColor.opacity(0.15))
+            .foregroundColor(badgeColor)
+            .cornerRadius(6)
+    }
+
+    var formattedStatus: String {
+        switch status {
+        case "PASSED_PASSCODE": return "Passed"
+        case "SENT_TO_VOICEMAIL": return "Voicemail"
+        case "DIRECT_DIAL": return "Direct Dial"
+        default: return status
+        }
+    }
+
+    var badgeColor: Color {
+        switch status {
+        case "PASSED_PASSCODE": return .green
+        case "SENT_TO_VOICEMAIL": return .orange
+        case "DIRECT_DIAL": return .blue
+        default: return .gray
+        }
+    }
+}
+
+
+CarrierActivationView
+
+import SwiftUI
+
+struct CarrierActivationView: View {
+    let selectedCarrierRaw: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var showCopiedAlert = false
+    
+    // Assigned Twilio screening number from your backend setup
+    let twilioNumber = "+12812476667"
+    
+    var currentCarrier: MobileCarrier {
+        MobileCarrier(rawValue: selectedCarrierRaw) ?? .att
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                // Header Icon
+                Image(systemName: "phone.badge.waveform")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
+                    .padding(.top, 20)
+                
+                Text("Activate Call Protection")
+                    .font(.title2)
+                    .bold()
+                
+                Text("Your account is ready! To start screening calls through your **\(currentCarrier.rawValue)** network, please activate conditional call forwarding.")
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+                
+                // Code Display Box
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Your Activation Code:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Text(currentCarrier.forwardingCode(for: twilioNumber))
+                        .font(.system(.title3, design: .monospaced))
+                        .bold()
+                        .foregroundColor(.blue)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.systemGray6))
+                .cornerRadius(12)
+                .padding(.horizontal)
+                
+                // Action Buttons
+                VStack(spacing: 12) {
+                    // Button 1: Copy Code
+                    Button(action: {
+                        let code = currentCarrier.forwardingCode(for: twilioNumber)
+                        UIPasteboard.general.string = code
+                        showCopiedAlert = true
+                    }) {
+                        Label("Copy Activation Code", systemImage: "doc.on.doc")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    
+                    // Button 2: Open Phone App
+                    Button(action: {
+                        if let url = URL(string: "tel://") {
+                            UIApplication.shared.open(url)
+                        }
+                    }) {
+                        Label("Open Phone App & Dial", systemImage: "phone.fill")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                }
+                .padding(.horizontal)
+                
+                Spacer()
+                
+                // Finish Button
+                Button("Done / Skip for Now") {
+                    dismiss()
+                }
+                .foregroundColor(.secondary)
+                .padding(.bottom, 20)
+            }
+            .padding()
+            .navigationTitle("Setup Wizard")
+            .navigationBarTitleDisplayMode(.inline)
+            .alert("Code Copied!", isPresented: $showCopiedAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Paste this code into your iPhone Phone app keypad and press Call to activate protection.")
+            }
+        }
+    }
+}
+
+#Preview {
+    CarrierActivationView(selectedCarrierRaw: "AT&T")
+}
+
+
+ContactComparisonView
+
+import SwiftUI
+
+struct ContactComparisonView: View {
+    @StateObject private var syncManager = ContactSyncManager()
+    @AppStorage("loggedginUserId") private var userId: Int = 0
+    @State private var searchText = ""
+    @State private var showingAddContact = false
+
+    // Filtered computed properties for search
+    var filteredSyncedContacts: [MCSContactModel] {
+        if searchText.isEmpty {
+            return syncManager.syncedContacts
+        } else {
+            return syncManager.syncedContacts.filter {
+                $0.name.localizedStandardContains(searchText) || $0.phoneNumber.contains(searchText)
+            }
+        }
+    }
+
+    var filteredUnsyncedContacts: [MCSContactModel] {
+        if searchText.isEmpty {
+            return syncManager.unsyncedContacts
+        } else {
+            return syncManager.unsyncedContacts.filter {
+                $0.name.localizedStandardContains(searchText) || $0.phoneNumber.contains(searchText)
+            }
+        }
+    }
+
+    var body: some View {
+        NavigationView {
+            VStack {
+                // Search Bar
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField("Search contacts", text: $searchText)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+
+                // Action Buttons Header: "Add Single Contact" & "Sync All"
+                HStack(spacing: 12) {
+                    Button(action: {
+                        showingAddContact = true
+                    }) {
+                        Label("Add Single", systemImage: "person.badge.plus")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.blue.opacity(0.1))
+                            .foregroundColor(.blue)
+                            .cornerRadius(10)
+                    }
+
+                    Button(action: {
+                        print("DEBUG: 'Sync All' pressed in UI with userId: \(userId)")
+                        syncManager.syncAllContacts(userId: userId)
+                    }) {
+                        Label("Sync All", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.green.opacity(0.15))
+                            .foregroundColor(.green)
+                            .cornerRadius(10)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+
+                List {
+                    Section(header: Text("Protected / Synced Contacts")) {
+                        ForEach(filteredSyncedContacts) { contact in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(contact.name).font(.headline)
+                                    Text(contact.phoneNumber).font(.subheadline).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Text("Protected")
+                                    .font(.caption)
+                                    .padding(6)
+                                    .background(Color.green.opacity(0.2))
+                                    .foregroundColor(.green)
+                                    .cornerRadius(6)
+                            }
+                        }
+                    }
+
+                    Section(header: Text("Unsynced Device Contacts")) {
+                        ForEach(filteredUnsyncedContacts) { contact in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(contact.name).font(.headline)
+                                    Text(contact.phoneNumber).font(.subheadline).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Button(action: {
+                                    addContactToBackend(contact)
+                                }) {
+                                    Text("Shield")
+                                        .fontWeight(.bold)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.blue)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(8)
+                                }
+                            }
+                        }
+                    }
+                }
+                .listStyle(InsetGroupedListStyle())
+            }
+            .navigationTitle("Trusted Contacts")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showingAddContact = true
+                    }) {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingAddContact) {
+                AddContactView()
+            }
+            .onAppear {
+                syncManager.fetchDeviceContacts()
+                if userId > 0 {
+                    syncManager.fetchBackendContacts(userId: userId)
+                }
+            }
+        }
+    }
+
+    func addContactToBackend(_ contact: MCSContactModel) {
+        print("Shielding contact: \(contact.name)")
+    }
+}
+
+
+ContactPicker
+
+import SwiftUI
+import ContactsUI
+
+struct SystemContactPicker: UIViewControllerRepresentable {
+    var onContactsSelected: ([MCSContactModel]) -> Void
+    var onError: (String) -> Void = { _ in }
+    @Environment(\.presentationMode) var presentationMode
+    
+    func makeUIViewController(context: Context) -> CNContactPickerViewController {
+        let picker = CNContactPickerViewController()
+        picker.delegate = context.coordinator
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {
+        // No update needed
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+    
+    class Coordinator: NSObject, CNContactPickerDelegate {
+        var parent: SystemContactPicker
+        
+        init(parent: SystemContactPicker) {
+            self.parent = parent
+        }
+        
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contacts: [CNContact]) {
+            print("[DEBUG] contactPicker delegate fired! Selected count: \(contacts.count)")
+            
+            let models = contacts.compactMap { cnContact -> MCSContactModel? in
+                let name = "\(cnContact.givenName) \(cnContact.familyName)".trimmingCharacters(in: .whitespaces)
+                guard let phone = cnContact.phoneNumbers.first?.value.stringValue else {
+                    print("[DEBUG] Skipped contact due to missing phone number.")
+                    return nil
+                }
+                
+                print("[DEBUG] Mapped contact: \(name), phone: \(phone)")
+                return MCSContactModel(
+                    name: name,
+                    phoneNumber: phone,
+                    isTrusted: true,
+                    isPrimary: false
+                )
+            }
+            
+            print("[DEBUG] Passing \(models.count) models to parent.onContactsSelected")
+            parent.onContactsSelected(models)
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+        
+        func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
+            print("[DEBUG] contactPickerDidCancel was called.")
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+    }
+}
+
+
+ContactPickerPresenter
+
+
+
+import SwiftUI
+import Contacts
+import ContactsUI
+
+struct ContactPickerPresenter: View {
+    var onContactsSelected: ([MCSContactModel]) -> Void
+    var onCancel: () -> Void
+
+    var body: some View {
+        SystemContactPicker { selectedList in
+            onContactsSelected(selectedList)
+        } onError: { errorMessage in
+            print("❌ Picker error: \(errorMessage)")
+        }
+    }
+}
+
+
+ContactSyncManager
+
+import Foundation
+import Contacts
+import Combine
+
+class ContactSyncManager: ObservableObject {
+    @Published var syncedContacts: [MCSContactModel] = []
+    @Published var unsyncedContacts: [MCSContactModel] = []
+    
+    // MARK: - Fetch Local Device Contacts & Compare with Backend
+    func fetchDeviceContacts() {
+        let store = CNContactStore()
+        
+        store.requestAccess(for: .contacts) { [weak self] granted, error in
+            guard granted, let self = self else { return }
+            
+            let keysToFetch = [
+                CNContactGivenNameKey,
+                CNContactFamilyNameKey,
+                CNContactPhoneNumbersKey
+            ] as [CNKeyDescriptor]
+            
+            let request = CNContactFetchRequest(keysToFetch: keysToFetch)
+            var allDeviceContacts: [MCSContactModel] = []
+            
+            do {
+                try store.enumerateContacts(with: request) { contact, _ in
+                    let fullName = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
+                    let contactName = fullName.isEmpty ? "Unknown Contact" : fullName
+                    
+                    for phoneNumberObj in contact.phoneNumbers {
+                        let rawNumber = phoneNumberObj.value.stringValue
+                        let normalizedNumber = rawNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                        
+                        if !normalizedNumber.isEmpty {
+                            let model = MCSContactModel(name: contactName, phoneNumber: normalizedNumber, isTrusted: false, isPrimary: false)
+                            if !allDeviceContacts.contains(where: { $0.phoneNumber == normalizedNumber }) {
+                                allDeviceContacts.append(model)
+                            }
+                        }
+                    }
+                }
+                
+                DispatchQueue.main.async {
+                    self.unsyncedContacts = allDeviceContacts
+                }
+            } catch {
+                print("[ERROR] Failed to fetch local device contacts: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Fetch Backend Contacts for Comparison
+    func fetchBackendContacts(userId: Int) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/\(userId)") else { return }
+        
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            guard let self = self, let data = data, error == nil else {
+                print("[ERROR] Network error: \(String(describing: error))")
+                return
+            }
+            
+            // Check HTTP status code
+            if let httpResponse = response as? HTTPURLResponse {
+                print("[DEBUG] Status code: \(httpResponse.statusCode)")
+                
+                if !(200...299).contains(httpResponse.statusCode) {
+                    if let errorString = String(data: data, encoding: .utf8) {
+                        print("[ERROR] Server returned error payload: \(errorString)")
+                    }
+                    return
+                }
+            }
+            
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("[DEBUG] Backend raw response: \(jsonString)")
+            }
+            
+            struct BackendContact: Codable {
+                let name: String
+                let phone_number: String
+                let is_guardian: Bool?
+                let is_primary: Bool?
+            }
+            
+            do {
+                let backendList = try JSONDecoder().decode([BackendContact].self, from: data)
+                let backendNumbers = Set(backendList.map { $0.phone_number })
+                
+                DispatchQueue.main.async {
+                    var synced: [MCSContactModel] = []
+                    var unsynced: [MCSContactModel] = []
+                    
+                    let combinedCurrent = self.unsyncedContacts + self.syncedContacts
+                    
+                    for contact in combinedCurrent {
+                        let isBackendMatch = backendNumbers.contains(contact.phoneNumber)
+                        if isBackendMatch {
+                            let matchInfo = backendList.first(where: { $0.phone_number == contact.phoneNumber })
+                            let updated = MCSContactModel(
+                                name: contact.name,
+                                phoneNumber: contact.phoneNumber,
+                                isTrusted: matchInfo?.is_guardian ?? true,
+                                isPrimary: matchInfo?.is_primary ?? false
+                            )
+                            synced.append(updated)
+                        } else {
+                            unsynced.append(contact)
+                        }
+                    }
+                    
+                    if combinedCurrent.isEmpty {
+                        for bc in backendList {
+                            synced.append(MCSContactModel(
+                                name: bc.name,
+                                phoneNumber: bc.phone_number,
+                                isTrusted: bc.is_guardian ?? true,
+                                isPrimary: bc.is_primary ?? false
+                            ))
+                        }
+                    }
+                    
+                    self.syncedContacts = synced
+                    self.unsyncedContacts = unsynced
+                }
+            } catch {
+                print("[ERROR] Failed to parse contact list: \(error)")
+            }
+        }.resume()
+    }
+    
+    /// Requests access to device contacts, fetches them, and uploads them to the backend in bulk.
+    static func syncDeviceContacts(userId: Int, completion: @escaping (Bool, String) -> Void) {
+        let store = CNContactStore()
+        
+        store.requestAccess(for: .contacts) { granted, error in
+            guard granted else {
+                DispatchQueue.main.async {
+                    completion(false, "Permission to access contacts was denied.")
+                }
+                return
+            }
+            
+            let keysToFetch = [
+                CNContactGivenNameKey,
+                CNContactFamilyNameKey,
+                CNContactPhoneNumbersKey
+            ] as [CNKeyDescriptor]
+            
+            let request = CNContactFetchRequest(keysToFetch: keysToFetch)
+            var formattedContacts: [[String: Any]] = []
+            
+            do {
+                try store.enumerateContacts(with: request) { contact, _ in
+                    let fullName = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
+                    let contactName = fullName.isEmpty ? "Unknown Contact" : fullName
+                    
+                    var phoneNumbers: [String] = []
+                    for phoneNumberObj in contact.phoneNumbers {
+                        let rawNumber = phoneNumberObj.value.stringValue
+                        let normalizedNumber = rawNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                        
+                        if !normalizedNumber.isEmpty && !phoneNumbers.contains(normalizedNumber) {
+                            phoneNumbers.append(normalizedNumber)
+                        }
+                    }
+                    
+                    if !phoneNumbers.isEmpty {
+                        let contactDict: [String: Any] = [
+                            "name": contactName,
+                            "phone_numbers": phoneNumbers,
+                            "is_guardian": false
+                        ]
+                        formattedContacts.append(contactDict)
+                    }
+                }
+                
+                sendBulkContactsToServer(userId: userId, contacts: formattedContacts, completion: completion)
+                
+            } catch {
+                DispatchQueue.main.async {
+                    completion(false, "Failed to fetch device contacts: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private static func sendBulkContactsToServer(userId: Int, contacts: [[String: Any]], completion: @escaping (Bool, String) -> Void) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/bulk") else {
+            DispatchQueue.main.async { completion(false, "Invalid server URL.") }
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let payload: [String: Any] = [
+            "userId": userId,
+            "contacts": contacts
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+        } catch {
+            DispatchQueue.main.async { completion(false, "Failed to encode contacts payload.") }
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(false, "Network error: \(error.localizedDescription)")
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                    completion(false, "Server rejected the bulk sync request.")
+                    return
+                }
+                
+                completion(true, "Contacts synced successfully!")
+            }
+        }.resume()
+    }
+    
+    func syncAllContacts(userId: Int) {
+        print("DEBUG: 'Sync All' button pressed. Requesting contact access...")
+        
+        let store = CNContactStore()
+        
+        store.requestAccess(for: .contacts) { [weak self] granted, error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                print("DEBUG ERROR: Permission request returned error: \(error.localizedDescription)")
+                return
+            }
+            
+            guard granted else {
+                print("DEBUG WARNING: User denied contacts permission.")
+                return
+            }
+            
+            print("DEBUG: Permission granted. Starting contact fetch...")
+            
+            let keysToFetch = [
+                CNContactGivenNameKey,
+                CNContactFamilyNameKey,
+                CNContactPhoneNumbersKey
+            ] as [CNKeyDescriptor]
+            
+            let request = CNContactFetchRequest(keysToFetch: keysToFetch)
+            var formattedContacts: [[String: Any]] = []
+            
+            do {
+                try store.enumerateContacts(with: request) { contact, _ in
+                    let fullName = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
+                    let contactName = fullName.isEmpty ? "Unknown Contact" : fullName
+                    
+                    var phoneNumbers: [String] = []
+                    for phoneNumberObj in contact.phoneNumbers {
+                        let rawNumber = phoneNumberObj.value.stringValue
+                        let normalizedNumber = rawNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                        
+                        if !normalizedNumber.isEmpty && !phoneNumbers.contains(normalizedNumber) {
+                            phoneNumbers.append(normalizedNumber)
+                        }
+                    }
+                    
+                    if !phoneNumbers.isEmpty {
+                        let contactDict: [String: Any] = [
+                            "name": contactName,
+                            "phone_numbers": phoneNumbers,
+                            "is_guardian": false
+                        ]
+                        formattedContacts.append(contactDict)
+                    }
+                }
+                
+                print("DEBUG: Fetched \(formattedContacts.count) contacts. Uploading to server...")
+                
+                ContactSyncManager.sendBulkContactsToServer(userId: userId, contacts: formattedContacts) { success, message in
+                    print("DEBUG: Bulk upload response - Success: \(success), Message: \(message)")
+                    if success {
+                        self.fetchDeviceContacts()
+                        self.fetchBackendContacts(userId: userId)
+                    }
+                }
+                
+            } catch {
+                print("DEBUG CRITICAL ERROR: Failed to fetch contacts: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    // MARK: - Save Single Contact
+    func saveSingleContact(userId: Int, name: String, phoneNumber: String, completion: (() -> Void)? = nil) {
+        guard userId > 0 else {
+            print("ERROR: Invalid userId")
+            return
+        }
+        
+        let payload: [String: Any] = [
+            "userId": userId,
+            "contacts": [
+                [
+                    "name": name,
+                    "phone_numbers": [phoneNumber],
+                ]
+            ]
+        ]
+        
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/bulk") else { return }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            print("ERROR: Failed to encode single contact payload")
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            if let error = error {
+                print("ERROR: Failed to save single contact: \(error.localizedDescription)")
+                return
+            }
+            
+            DispatchQueue.main.async {
+                self?.fetchBackendContacts(userId: userId)
+                completion?()
+            }
+        }.resume()
+    }
+}
+
+ContactSyncView
+
+import SwiftUI
+
+// MARK: - Contact Sync View
+struct ContactSyncView: View {
+    @EnvironmentObject var session: SessionStore
+    
+    @AppStorage("hasSyncedPhoneContacts") private var hasSyncedPhoneContacts: Bool = false
+    @State private var isSyncing: Bool = false
+    @State private var statusMessage: String = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(
+                    header: Text("Device Contacts Sync"),
+                    footer: Text("Sync your phone's address book with your secure cloud backend to enable instant caller verification.")
+                ) {
+                    Button(action: {
+                        syncContacts()
+                    }) {
+                        HStack {
+                            Image(systemName: hasSyncedPhoneContacts ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+                            Text(hasSyncedPhoneContacts ? "Contacts Already Synced" : "Sync Phone Contacts")
+                                .fontWeight(.bold)
+                            Spacer()
+                            if isSyncing {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(hasSyncedPhoneContacts || isSyncing)
+                    .tint(hasSyncedPhoneContacts ? .gray : .blue)
+                }
+
+                if !statusMessage.isEmpty {
+                    Section {
+                        Text(statusMessage)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Contact Sync")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func syncContacts() {
+        isSyncing = true
+        statusMessage = "Syncing contacts..."
+        
+        ContactSyncManager.syncDeviceContacts(userId: session.userId) { success, message in
+            isSyncing = false
+            statusMessage = message
+            if success {
+                hasSyncedPhoneContacts = true
+            }
+        }
+    }
+}
+
+#Preview {
+    ContactSyncView()
+        .environmentObject(SessionStore())
+}
+
+
+ContentView
+
+import SwiftUI
+
+struct ContentView: View {
+    @AppStorage("isLoggedIn") private var isLoggedIn: Bool = false
+
+    var body: some View {
+        if isLoggedIn {
+            MainDashboardView(isLoggedIn: $isLoggedIn)
+        } else {
+            LoginView()
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+}
+
+
+GuardianService
+
+import Foundation
+import SwiftUI
+import Combine
+
+// MARK: - Models
+struct Guardian: Identifiable, Codable {
+    let id: Int?
+    let userId: Int?
+    let guardian_name: String
+    let guardian_phone: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case guardian_name
+        case guardian_phone
+    }
+}
+
+// MARK: - Network Manager for Guardians / Trusted Contacts
+class GuardianService: ObservableObject {
+    @Published var guardians: [Guardian] = []
+    @Published var isLoading: Bool = false
+    @Published var errorMessage: String?
+
+    private let baseURL = "https://mobilecallshield-backend.onrender.com/api/guardians"
+
+    // 1. Fetch Guardians for User
+    func fetchGuardians(userId: Int) {
+        isLoading = true
+        guard let url = URL(string: "\(baseURL)/\(userId)") else {
+            isLoading = false
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                self?.isLoading = false
+                if let error = error {
+                    self?.errorMessage = error.localizedDescription
+                    print("❌ Fetch error: \(error)")
+                    return
+                }
+
+                guard let data = data else { return }
+                
+                // Debug response
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    print("📡 Guardians Response: \(jsonString)")
+                }
+
+                do {
+                    let decoded = try JSONDecoder().decode([Guardian].self, from: data)
+                    self?.guardians = decoded
+                } catch {
+                    print("❌ Decode error: \(error)")
+                    self?.errorMessage = error.localizedDescription
+                }
+            }
+        }.resume()
+    }
+
+    // 2. Add a Trusted Contact / Guardian
+    func addGuardian(userId: Int, name: String, phone: String, completion: @escaping (Bool) -> Void) {
+        guard let url = URL(string: baseURL) else {
+            completion(false)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "userId": userId,
+            "guardian_name": name,
+            "guardian_phone": phone
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            print("❌ Request serialization error: \(error)")
+            completion(false)
+            return
+        }
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ Add error: \(error)")
+                    completion(false)
+                    return
+                }
+
+                if let httpResponse = response as? HTTPURLResponse {
+                    print("📡 Add Status Code: \(httpResponse.statusCode)")
+                    if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                        // Refresh the list after adding
+                        self?.fetchGuardians(userId: userId)
+                        completion(true)
+                        return
+                    }
+                }
+                completion(false)
+            }
+        }.resume()
+    }
+
+    // 3. Delete a Trusted Contact / Guardian
+    func deleteGuardian(id: Int, userId: Int, completion: @escaping (Bool) -> Void) {
+        guard let url = URL(string: "\(baseURL)/\(id)") else {
+            completion(false)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ Delete error: \(error)")
+                    completion(false)
+                    return
+                }
+
+                if let httpResponse = response as? HTTPURLResponse {
+                    print("📡 Delete Status Code: \(httpResponse.statusCode)")
+                    if httpResponse.statusCode == 200 {
+                        // Refresh the list after deleting
+                        self?.fetchGuardians(userId: userId)
+                        completion(true)
+                        return
+                    }
+                }
+                completion(false)
+            }
+        }.resume()
+    }
+}
+
+
+GuardianSettingsView
+
+import Foundation
+import SwiftUI
+import Contacts
+
+// MARK: - Guardian Settings View
+struct GuardianSettingsView: View {
+    let currentUserId: Int
+    @StateObject private var service = GuardianService()
+
+    @State private var showingAddGuardianAlert = false
+    @State private var newGuardianName = ""
+    @State private var newGuardianPhone = ""
+    
+    // Sheet presentation state for Guardian Code update
+    @State private var showChangeGuardianCodeSheet = false
+    
+    // One-time phone contacts sync state (persists across app launches)
+    @AppStorage("hasSyncedPhoneContacts") private var hasSyncedPhoneContacts: Bool = false
+    @State private var isSyncingContacts: Bool = false
+
+    var body: some View {
+        NavigationView {
+            Form {
+                // MARK: - Phone Contacts Sync Section (One-Time Use)
+                Section(
+                    header: Text("Device Contacts"),
+                    footer: Text(hasSyncedPhoneContacts ? "Phone contacts have already been synced to your trusted list." : "Import all contacts from your phone once to populate your trusted list.")
+                ) {
+                    Button(action: {
+                        syncAllPhoneContacts()
+                    }) {
+                        HStack {
+                            Image(systemName: hasSyncedPhoneContacts ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+                            Text(hasSyncedPhoneContacts ? "Contacts Already Synced" : "Sync All Phone Contacts")
+                                .fontWeight(.bold)
+                            Spacer()
+                            if isSyncingContacts {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(hasSyncedPhoneContacts || isSyncingContacts)
+                    .tint(hasSyncedPhoneContacts ? .gray : .blue)
+                }
+
+                // MARK: - Guardian Code Management Section
+                Section(
+                    header: Text("Guardian Security"),
+                    footer: Text("Manage your Guardian Code used to authorize high-security app actions.")
+                ) {
+                    Button(action: {
+                        showChangeGuardianCodeSheet = true
+                    }) {
+                        HStack {
+                            Label("Change Guardian Code", systemImage: "key.fill")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                    }
+                }
+
+                // MARK: - Registered Guardians Section
+                Section(header: Text("Registered Guardians")) {
+                    if service.isLoading {
+                        ProgressView()
+                    } else if service.guardians.isEmpty {
+                        Text("No guardians assigned yet.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(service.guardians) { guardian in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(guardian.guardian_name)
+                                        .font(.headline)
+                                    Text(guardian.guardian_phone)
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "shield.fill")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .onDelete { indexSet in
+                            for index in indexSet {
+                                let guardian = service.guardians[index]
+                                if let id = guardian.id {
+                                    service.deleteGuardian(id: id, userId: currentUserId) { _ in }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    Button(action: {
+                        showingAddGuardianAlert = true
+                    }) {
+                        Label("Add Guardian Manually", systemImage: "person.badge.plus")
+                    }
+                }
+            }
+            .navigationTitle("Guardian Settings")
+            .onAppear {
+                service.fetchGuardians(userId: currentUserId)
+            }
+            .sheet(isPresented: $showChangeGuardianCodeSheet) {
+                ChangeGuardianCodeView(userId: currentUserId)
+            }
+            .alert("Add Guardian", isPresented: $showingAddGuardianAlert) {
+                TextField("Guardian Name", text: $newGuardianName)
+                TextField("Phone Number", text: $newGuardianPhone)
+                    .keyboardType(.phonePad)
+                Button("Save") {
+                    if !newGuardianName.isEmpty && !newGuardianPhone.isEmpty {
+                        service.addGuardian(userId: currentUserId, name: newGuardianName, phone: newGuardianPhone) { success in
+                            if success {
+                                newGuardianName = ""
+                                newGuardianPhone = ""
+                            }
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter the name and phone number of the guardian.")
+            }
+        }
+    }
+    
+    // MARK: - Sync Action Handler
+    private func syncAllPhoneContacts() {
+        isSyncingContacts = true
+        
+        ContactSyncManager.syncDeviceContacts(userId: currentUserId) { success, message in
+            isSyncingContacts = false
+            if success {
+                hasSyncedPhoneContacts = true // Permanently locks the button
+                print(message)
+            } else {
+                print("Sync error: \(message)")
+            }
+        }
+    }
+}
+
+// MARK: - Change Guardian Code Verification Modal View
+struct ChangeGuardianCodeView: View {
+    @Environment(\.dismiss) private var dismiss
+    let userId: Int
+    
+    @State private var currentCode: String = ""
+    @State private var newCode: String = ""
+    @State private var confirmNewCode: String = ""
+    
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String = ""
+    @State private var successMessage: String = ""
+
+    private var isValidInput: Bool {
+        !currentCode.isEmpty &&
+        !newCode.isEmpty &&
+        !confirmNewCode.isEmpty &&
+        (newCode == confirmNewCode)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Current Guardian Code")) {
+                    SecureField("Current Guardian Code", text: $currentCode)
+                        .keyboardType(.numberPad)
+                }
+
+                Section(
+                    header: Text("New Guardian Code"),
+                    footer: Text(newCode.isEmpty || confirmNewCode.isEmpty ? "" : (newCode == confirmNewCode ? "✓ Codes match" : "❌ New codes do not match"))
+                ) {
+                    SecureField("New Guardian Code", text: $newCode)
+                        .keyboardType(.numberPad)
+                    
+                    SecureField("Confirm New Guardian Code", text: $confirmNewCode)
+                        .keyboardType(.numberPad)
+                }
+
+                if !errorMessage.isEmpty {
+                    Section {
+                        Text(errorMessage).foregroundColor(.red).font(.caption)
+                    }
+                }
+
+                if !successMessage.isEmpty {
+                    Section {
+                        Text(successMessage).foregroundColor(.green).font(.caption)
+                    }
+                }
+
+                Section {
+                    Button(action: submitGuardianCodeChange) {
+                        HStack {
+                            Spacer()
+                            if isLoading {
+                                ProgressView()
+                            } else {
+                                Text("OK").fontWeight(.bold).foregroundColor(.white)
+                            }
+                            Spacer()
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .background(isValidInput && !isLoading ? Color.blue : Color.gray)
+                    .cornerRadius(10)
+                    .disabled(!isValidInput || isLoading)
+                }
+            }
+            .navigationTitle("Change Guardian Code")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func submitGuardianCodeChange() {
+        isLoading = true
+        errorMessage = ""
+        successMessage = ""
+
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/user/update-pin") else {
+            isLoading = false
+            errorMessage = "Invalid server URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "userId": userId,
+            "currentPin": currentCode.trimmingCharacters(in: .whitespaces),
+            "newPin": newCode.trimmingCharacters(in: .whitespaces)
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            DispatchQueue.main.async {
+                isLoading = false
+                if let error = error {
+                    errorMessage = "Network error: \(error.localizedDescription)"
+                    return
+                }
+                guard let data = data else {
+                    errorMessage = "No response from server."
+                    return
+                }
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let success = json["success"] as? Bool ?? false
+                        if success {
+                            successMessage = json["message"] as? String ?? "Guardian Code updated successfully!"
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                dismiss()
+                            }
+                        } else {
+                            errorMessage = json["error"] as? String ?? "Failed to update Guardian Code."
+                        }
+                    }
+                } catch {
+                    errorMessage = "Failed to parse response."
+                }
+            }
+        }.resume()
+    }
+}
+
+
+LoginView
+
+import SwiftUI
+
+struct LoginView: View {
+    @EnvironmentObject var session: SessionStore
+
+    @AppStorage("loggedInUserId") private var loggedInUserId: Int = 0
+    @AppStorage("userRole") private var userRole: String = "user"
+    @AppStorage("isAdmin") private var isAdmin: Bool = false
+    
+    @State private var username: String = ""
+    @State private var password: String = ""
+    @State private var showPassword: Bool = false
+    @State private var errorMessage: String = ""
+    @State private var isLoading: Bool = false
+    @State private var showingForgotPassword = false
+    @State private var resetEmail = ""
+    @State private var showingRegisterSheet = false
+    
+    @State private var logoUrlString: String = ""
+    @State private var appTitle: String = "Mobile Call Shield"
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(.systemGroupedBackground)
+                    .ignoresSafeArea()
+                 
+                VStack(spacing: 24) {
+                    Spacer()
+                     
+                    // Dynamic Logo Header
+                    ZStack {
+                        if let url = URL(string: logoUrlString), !logoUrlString.isEmpty {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .empty:
+                                    ProgressView()
+                                case .success(let image):
+                                    image
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 190, height: 150)
+                                        .clipShape(Circle())
+                                case .failure(_):
+                                    Image("MCS - Phone Icon")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 190, height: 150)
+                                @unknown default:
+                                    EmptyView()
+                                }
+                            }
+                        } else {
+                            Image("MCS - Phone Icon")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 120, height: 120)
+                        }
+                    }
+                    .frame(height: 140)
+                     
+                    Text(appTitle)
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                        .foregroundColor(.primary)
+                     
+                    Text("Sign in to protect your device")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                     
+                    Spacer()
+                     
+                    // Input Fields Card
+                    VStack(spacing: 16) {
+                        TextField("Email", text: $username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .cornerRadius(10)
+                         
+                        // Password Field
+                        HStack {
+                            if showPassword {
+                                TextField("Password", text: $password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                            } else {
+                                SecureField("Password", text: $password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                            }
+                             
+                            Button(action: {
+                                showPassword.toggle()
+                            }) {
+                                Image(systemName: showPassword ? "eye.slash.fill" : "eye.fill")
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .cornerRadius(10)
+                         
+                        if !errorMessage.isEmpty {
+                            Text(errorMessage)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                         
+                        Button(action: {
+                            performLogin()
+                        }) {
+                            HStack {
+                                Spacer()
+                                if isLoading {
+                                    ProgressView()
+                                        .tint(.white)
+                                } else {
+                                    Text("Log In")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(10)
+                        .disabled(username.isEmpty || password.isEmpty || isLoading)
+                         
+                        // Forgot Password Button
+                        Button(action: {
+                            showingForgotPassword = true
+                        }) {
+                            Text("Forgot Password?")
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.top, 4)
+                        .alert("Reset Password", isPresented: $showingForgotPassword) {
+                            TextField("Enter your email", text: $resetEmail)
+                                .textInputAutocapitalization(.never)
+                                .keyboardType(.emailAddress)
+                             
+                            Button("Send Reset Link") {
+                                sendPasswordResetRequest()
+                            }
+                            Button("Cancel", role: .cancel) { }
+                        } message: {
+                            Text("Enter the email address associated with your account.")
+                        }
+
+                        Divider()
+                            .padding(.vertical, 4)
+
+                        // Create Account Link
+                        HStack {
+                            Text("Don't have an account?")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                             
+                            Button(action: {
+                                showingRegisterSheet = true
+                            }) {
+                                Text("Create Account")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .sheet(isPresented: $showingRegisterSheet) {
+                            RegisterView()
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                     
+                    Spacer()
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .onAppear {
+                fetchAppSettings()
+            }
+        }
+    }
+
+    private func fetchAppSettings() {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/settings") else { return }
+         
+        URLSession.shared.dataTask(with: url) { data, response, error in
+            guard let data = data, error == nil else { return }
+             
+            do {
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let settings = json["settings"] as? [String: Any] {
+                    DispatchQueue.main.async {
+                        if let fetchedLogo = settings["logo_url"] as? String {
+                            self.logoUrlString = fetchedLogo
+                        }
+                        if let fetchedName = settings["app_name"] as? String {
+                            self.appTitle = fetchedName
+                        }
+                    }
+                }
+            } catch {
+                print("Failed to decode settings: \(error)")
+            }
+        }.resume()
+    }
+
+    private func performLogin() {
+        isLoading = true
+        errorMessage = ""
+         
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/auth/login") else {
+            isLoading = false
+            errorMessage = "Invalid server URL."
+            return
+        }
+         
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+         
+        let body: [String: Any] = [
+            "email": username.trimmingCharacters(in: .whitespaces),
+            "password": password
+        ]
+         
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+         
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                isLoading = false
+                 
+                if let error = error {
+                    errorMessage = "Network error: \(error.localizedDescription)"
+                    return
+                }
+                 
+                guard let data = data else {
+                    errorMessage = "No response from server."
+                    return
+                }
+                 
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let successFlag = json["success"] as? Bool ?? false
+                         
+                        if successFlag {
+                            let resolvedUserId: Int
+                            if let userDict = json["user"] as? [String: Any],
+                               let userId = userDict["id"] as? Int {
+                                resolvedUserId = userId
+                                userRole = (userDict["role"] as? String) ?? "user"
+                                isAdmin = userRole.lowercased() == "admin"
+                            } else {
+                                resolvedUserId = 1
+                            }
+                            
+                            // Save to legacy AppStorage keys if needed
+                            loggedInUserId = resolvedUserId
+                            
+                            // UPDATE SESSION STORE: This instantly updates the global session & triggers prints!
+                            session.login(userId: resolvedUserId)
+                            print("[DEBUG - LoginView] Successfully logged in and assigned userId: \(resolvedUserId)")
+                            
+                        } else {
+                            let serverError = json["error"] as? String ?? "Unknown server rejection."
+                            errorMessage = serverError
+                        }
+                    } else {
+                        errorMessage = "Invalid response format from server."
+                    }
+                } catch {
+                    errorMessage = "Failed to parse response."
+                }
+            }
+        }.resume()
+    }
+
+    private func sendPasswordResetRequest() {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/forgot-password") else { return }
+         
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+         
+        let body = ["email": resetEmail.trimmingCharacters(in: .whitespaces)]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+         
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    errorMessage = "Error: \(error.localizedDescription)"
+                    return
+                }
+                errorMessage = "If that email exists, reset instructions have been sent."
+            }
+        }.resume()
+    }
+}
+
+#Preview {
+    LoginView()
+        .environmentObject(SessionStore())
+}
+
+
+MainDashboardView
+
+import SwiftUI
+
+struct MainDashboardView: View {
+    @Binding var isLoggedIn: Bool
+    
+    @AppStorage("userRole") private var userRole: String = "user"
+    @AppStorage("isAdmin") private var isAdmin: Bool = false
+    @AppStorage("loggedInUserId") private var loggedInUserId: Int = 1
+    
+    @State private var showLogoutAlert: Bool = false
+    @State private var isPulsing: Bool = false
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(.systemGroupedBackground)
+                    .ignoresSafeArea()
+                 
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // Pulsing Active Protection Shield Logo
+                        ZStack {
+                            Circle()
+                                .fill(Color.green.opacity(0.2))
+                                .frame(width: 120, height: 120)
+                                .scaleEffect(isPulsing ? 1.3 : 1.0)
+                                .opacity(isPulsing ? 0.2 : 0.8)
+                             
+                            Circle()
+                                .fill(Color.green.opacity(0.3))
+                                .frame(width: 95, height: 95)
+                             
+                            Image(systemName: "shield.fill")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 60, height: 60)
+                                .foregroundColor(.green)
+                             
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                        .frame(height: 150)
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                                isPulsing = true
+                            }
+                        }
+                         
+                        Text("Protection Active")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                         
+                        Text("Your device is actively guarding against scam calls.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                         
+                        // Main Navigation Cards / Buttons
+                        VStack(spacing: 16) {
+                            // Guardian & Security Settings
+                            NavigationLink(destination: GuardianSettingsView(currentUserId: loggedInUserId)) {
+                                DashboardCard(icon: "shield.fill", iconColor: .purple, title: "Guardian & Security Settings")
+                            }
+                            
+                            // Manage Trusted Contacts
+                            NavigationLink(destination: AllContactsView()) {
+                                DashboardCard(icon: "person.2.fill", iconColor: .blue, title: "Manage Trusted Contacts")
+                            }
+                             
+                            // Call History & Voicemails (Matched to CallHistoryView)
+                            NavigationLink(destination: CallHistoryView()) {
+                                DashboardCard(icon: "phone.bubble.left.fill", iconColor: .indigo, title: "Call History & Voicemails")
+                            }
+                            
+                            // Shield Settings (Passing currentUserId)
+                            // Shield Settings
+                        NavigationLink(destination: AppSettingsView()) {
+                                DashboardCard(icon: "shield.lefthalf.filled", iconColor: .green, title: "Shield Settings")
+                            }
+
+                            // Subscription & Billing
+                            NavigationLink(destination: SubscribeView()) {
+                                DashboardCard(icon: "creditcard.fill", iconColor: .teal, title: "Subscription & Billing")
+                            }
+                             
+                            // Admin Control Panel (Hidden UNLESS logged-in user is Admin)
+                            if isAdmin || userRole.lowercased() == "admin" {
+                                NavigationLink(destination: AdminDashboardView()) {
+                                    DashboardCard(icon: "gearshape.2.fill", iconColor: .orange, title: "Adminstration Settings")
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.bottom, 30)
+                    }
+                    .padding(.top, 20)
+                }
+            }
+            .navigationTitle("Dashboard")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showLogoutAlert = true
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                            Text("Log Out")
+                        }
+                        .foregroundColor(.red)
+                        .fontWeight(.semibold)
+                    }
+                }
+            }
+            .alert("Log Out of Mobile Call Shield?", isPresented: $showLogoutAlert) {
+                Button("OK", role: .destructive) {
+                    performLogout()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("You are about to log out of the app. You will no longer be protected by Mobile Call Shield until you log back in.")
+            }
+        }
+    }
+
+    private func performLogout() {
+        if let domain = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: domain)
+            UserDefaults.standard.synchronize()
+        }
+        isLoggedIn = false
+    }
+}
+
+struct DashboardCard: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundColor(iconColor)
+            Text(title)
+                .font(.system(size: 15, weight: .semibold)) // Adjusted font size here
+                .foregroundColor(.primary)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.03), radius: 4, x: 0, y: 2)
+    }
+}
+
+
+MCSContactModel
+
+import Foundation
+
+struct MCSContactModel: Identifiable, Codable {
+    var id: Int?
+    var name: String
+    var phoneNumber: String
+    var isTrusted: Bool       // maps to is_guardian
+    var isPrimary: Bool       // maps to is_primary
+    
+    // Provides a non-optional ID for SwiftUI's Identifiable conformance
+    var computedID: Int {
+        return id ?? phoneNumber.hashValue
+    }
+    
+    var idValue: Int {
+        return id ?? 0
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case phoneNumber = "phone_number"
+        case isTrusted = "is_guardian"
+        case isPrimary = "is_primary"
+    }
+}
+
+
+MobileCallShieldApp
+
+import SwiftUI
+
+@main
+struct MobileCallShieldApp: App {
+    // 1. Create a single instance of your SessionStore for the entire app
+    @StateObject private var session = SessionStore()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                // 2. Inject it into the environment so all child views can access it
+                .environmentObject(session)
+        }
+    }
+}
+
+
+MobileCarrier
+
+import Foundation
+
+enum MobileCarrier: String, CaseIterable, Identifiable, Codable {
+    case att = "AT&T"
+    case verizon = "Verizon"
+    case tmobile = "T-Mobile"
+    case visible = "Visible (Verizon)"
+    case totalWireless = "Total Wireless (Verizon)"
+    case straightTalk = "Straight Talk"
+    case cricket = "Cricket Wireless (AT&T)"
+    case mint = "Mint Mobile (T-Mobile)"
+    case metro = "Metro by T-Mobile"
+    
+    var id: String { self.rawValue }
+    
+    /// Generates carrier-specific USSD star code to activate conditional call forwarding
+    func forwardingCode(for twilioNumber: String) -> String {
+        // Strip out non-numeric characters (leaving only digits)
+        let digitsOnly = twilioNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+        
+        // Take the last 10 digits (e.g., 2812476667)
+        let tenDigitNumber = String(digitsOnly.suffix(10))
+        
+        switch self {
+        case .verizon, .visible, .totalWireless, .straightTalk:
+            // Verizon network code format (*71 + 10 digits)
+            return "*71\(tenDigitNumber)"
+            
+        case .att, .cricket:
+            // AT&T network code format (*61* + 10 digits + #)
+            return "*61*\(tenDigitNumber)#"
+            
+        case .tmobile, .mint, .metro:
+            // T-Mobile network code format (**61* + 10 digits + **15#)
+            return "**61*\(tenDigitNumber)**15#"
+        }
+    }
+    
+    /// Generates the carrier code to disable call forwarding
+    var disableCode: String {
+        switch self {
+        case .verizon, .visible, .totalWireless, .straightTalk:
+            return "*73" //
+        case .att, .cricket, .tmobile, .mint, .metro:
+            return "##61#" //
+        }
+    }
+}
+
+
+MyApp
+
+import SwiftUI
+
+@main struct MyApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+
+
+NumberProvisioningView
+
+import SwiftUI
+
+struct NumberProvisioningView: View {
+    @AppStorage("loggedInUserId") private var loggedInUserId: Int = 1
+    @State private var areaCodeInput: String = ""
+    @State private var assignedNumber: String?
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String?
+    @State private var successMessage: String?
+
+    var body: some View {
+        Form {
+            Section(
+                header: Text("Claim Your Screening Number"),
+                footer: Text("Enter your local 3-digit area code to automatically provision your dedicated SeniorScamShield phone number.")
+            ) {
+                TextField("Area Code (e.g., 512)", text: $areaCodeInput)
+                    .keyboardType(.numberPad)
+                
+                Button(action: provisionNumber) {
+                    if isLoading {
+                        ProgressView()
+                    } else {
+                        Text("Get My Number")
+                            .fontWeight(.bold)
+                    }
+                }
+                .disabled(areaCodeInput.count < 3 || isLoading)
+            }
+
+            if let number = assignedNumber {
+                Section(header: Text("Your Dedicated Number")) {
+                    Text(number)
+                        .font(.title2)
+                        .bold()
+                        .foregroundColor(.green)
+                    Text("You can now set up call forwarding from your carrier to this number.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if let error = errorMessage {
+                Section {
+                    Text(error).foregroundColor(.red)
+                }
+            }
+        }
+        .navigationTitle("Phone Setup")
+    }
+
+    private func provisionNumber() {
+        isLoading = true
+        errorMessage = nil
+        
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/subscription/activate") else {
+            isLoading = false
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "userId": loggedInUserId,
+            "areaCode": areaCodeInput
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                isLoading = false
+                if let error = error {
+                    errorMessage = "Network error: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data = data, let httpRes = response as? HTTPURLResponse else {
+                    errorMessage = "Invalid response from server."
+                    return
+                }
+
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let success = json["success"] as? Bool, success {
+                        self.assignedNumber = json["assignedPhoneNumber"] as? String
+                        successMessage = "Phone number successfully assigned!"
+                    } else {
+                        let errStr = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+                        errorMessage = errStr ?? "Failed to provision number."
+                    }
+                } catch {
+                    errorMessage = "Failed to decode server response."
+                }
+            }
+        }.resume()
+    }
+}
+
+
+PasscodeSettingsView
+
+import SwiftUI
+
+struct PasscodeSettingsView: View {
+    @State private var currentPasscode: String = ""
+    @State private var newPasscode: String = ""
+    @State private var confirmPasscode: String = ""
+    
+    @State private var isLoading: Bool = false
+    @State private var message: String = ""
+    @State private var isError: Bool = false
+    
+    // Retrieve logged-in user ID from UserDefaults
+    private var userId: Int {
+        return UserDefaults.standard.integer(forKey: "loggedInUserId")
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Current Passcode Settings"), footer: Text("Trusted callers and family members must speak this word or phrase after calling your protected number.")) {
+                    SecureField("New Passcode / Passphrase", text: $newPasscode)
+                    SecureField("Confirm New Passcode", text: $confirmPasscode)
+                    
+                    Button(action: {
+                        updatePasscode()
+                    }) {
+                        if isLoading {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("Save New Passcode")
+                                .frame(maxWidth: .infinity)
+                                .bold()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newPasscode.isEmpty || newPasscode != confirmPasscode || isLoading)
+                }
+                
+                if !message.isEmpty {
+                    Section {
+                        Text(message)
+                            .foregroundColor(isError ? .red : .green)
+                            .font(.subheadline)
+                    }
+                }
+            }
+            .navigationTitle("Passcode Shield")
+        }
+    }
+    
+    // MARK: - API Call to Update Passcode
+    private func updatePasscode() {
+        guard newPasscode == confirmPasscode, !newPasscode.isEmpty else {
+            isError = true
+            message = "Passcodes do not match."
+            return
+        }
+        
+        isLoading = true
+        message = ""
+        
+        guard let url = URL(string: "https://mobile-call-shield.onrender.com/api/user/passcode") else {
+            isLoading = false
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "userId": userId,
+            "passcode": newPasscode
+        ]
+        
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if let error = error {
+                    self.isError = true
+                    self.message = "Error: \(error.localizedDescription)"
+                    return
+                }
+                
+                self.isError = false
+                self.message = "Passcode updated successfully!"
+                self.newPasscode = ""
+                self.confirmPasscode = ""
+            }
+        }.resume()
+    }
+}
+
+#Preview {
+    PasscodeSettingsView()
+}
+
+
+RegisterView
+
+import SwiftUI
+import MapKit
+import Combine
+
+// MARK: - Address Autocomplete Search Manager
+@MainActor
+class AddressSearchManager: ObservableObject {
+    @Published var searchQuery: String = ""
+    @Published var searchResults: [MKMapItem] = []
+    
+    private var searchCancellable: AnyCancellable?
+    
+    init() {
+        searchCancellable = $searchQuery
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .removeDuplicates()
+            .sink { [weak self] query in
+                self?.performSearch(query: query)
+            }
+    }
+    
+    private func performSearch(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed.count > 2 else {
+            self.searchResults = []
+            return
+        }
+         
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = trimmed
+        request.resultTypes = .address
+         
+        let search = MKLocalSearch(request: request)
+        search.start { response, error in
+            guard let response = response, error == nil else { return }
+            Task { @MainActor in
+                self.searchResults = Array(response.mapItems.prefix(4))
+            }
+        }
+    }
+}
+
+// MARK: - RegisterView Component
+struct RegisterView: View {
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var name: String = ""
+    @State private var phoneNumber: String = ""
+    @State private var email: String = ""
+    @State private var password: String = ""
+    
+    // Address fields
+    @State private var streetAddress: String = ""
+    @State private var city: String = ""
+    @State private var state: String = ""
+    @State private var zipCode: String = ""
+    @State private var country: String = "United States"
+    
+    @StateObject private var searchManager = AddressSearchManager()
+    @State private var showAddressSuggestions: Bool = true
+    
+    // Security fields
+    @State private var pin: String = ""      // Owner PIN
+    @State private var passcode: String = "" // Call screening passphrase
+    @State private var agreedToPolicy: Bool = false
+    
+    @State private var errorMessage: String = ""
+    @State private var isLoading: Bool = false
+    @State private var successMessage: String = ""
+
+    // FORM VALIDATION: Properly placed at the struct scope level
+    private var isFormValid: Bool {
+        !name.isEmpty &&
+        !phoneNumber.isEmpty &&
+        !email.isEmpty &&
+        !password.isEmpty &&
+        !streetAddress.isEmpty &&
+        !city.isEmpty &&
+        !state.isEmpty &&
+        !zipCode.isEmpty &&
+        !pin.isEmpty &&
+        !passcode.isEmpty &&
+        agreedToPolicy
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                // MARK: - Account Details
+                Section(header: Text("Account Details"), footer: Text("Fields marked with an asterisk (*) are required.")) {
+                    HStack {
+                        Text("Full Name")
+                        Text("*").foregroundColor(.red)
+                        Spacer()
+                        TextField("Full Name / Username", text: $name)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    
+                    HStack {
+                        Text("Phone Number")
+                        Text("*").foregroundColor(.red)
+                        Spacer()
+                        TextField("555-123-4567", text: $phoneNumber)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.phonePad)
+                            .autocorrectionDisabled()
+                    }
+                    
+                    HStack {
+                        Text("Email")
+                        Text("*").foregroundColor(.red)
+                        Spacer()
+                        TextField("Email Address", text: $email)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .keyboardType(.emailAddress)
+                            .autocorrectionDisabled()
+                    }
+                    
+                    HStack {
+                        Text("Password")
+                        Text("*").foregroundColor(.red)
+                        Spacer()
+                        SecureField("Password", text: $password)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                    }
+                }
+                 
+                // MARK: - Address Section with Working Autocomplete
+                Section(header: Text("Billing / Home Address")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Street Address")
+                            Text("*").foregroundColor(.red)
+                            Spacer()
+                            TextField("Street Address", text: $streetAddress)
+                                .multilineTextAlignment(.trailing)
+                                .onChange(of: streetAddress) { newValue in
+                                    showAddressSuggestions = true
+                                    searchManager.searchQuery = newValue
+                                }
+                        }
+                       
+                        if showAddressSuggestions && !searchManager.searchResults.isEmpty && streetAddress.count > 2 {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Suggested Addresses:")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.secondary)
+                                 
+                                ForEach(searchManager.searchResults, id: \.self) { item in
+                                    Button(action: {
+                                        selectPlacemark(item.placemark)
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "mappin.circle.fill")
+                                                .foregroundColor(.blue)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(item.name ?? "")
+                                                    .font(.subheadline)
+                                                    .foregroundColor(.primary)
+                                                Text("\(item.placemark.locality ?? ""), \(item.placemark.administrativeArea ?? "") \(item.placemark.postalCode ?? "")")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        .padding(.vertical, 4)
+                                    }
+                                    Divider()
+                                }
+                            }
+                            .padding(8)
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .cornerRadius(8)
+                        }
+                    }
+                     
+                    HStack {
+                        Text("City")
+                        Text("*").foregroundColor(.red)
+                        Spacer()
+                        TextField("City", text: $city)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    
+                    HStack {
+                        Text("State")
+                        Text("*").foregroundColor(.red)
+                        Spacer()
+                        TextField("State / Province", text: $state)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    
+                    HStack {
+                        Text("Zip Code")
+                        Text("*").foregroundColor(.red)
+                        Spacer()
+                        TextField("Zip Code", text: $zipCode)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.numberPad)
+                    }
+                    
+                    HStack {
+                        Text("Country")
+                        Spacer()
+                        TextField("Country", text: $country)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                 
+                // MARK: - Security & Call Screening
+                Section(
+                    header: Text("Security & Call Screening"),
+                    footer: Text("The Owner PIN protects your account settings. The Voice Passcode is spoken by callers to bypass screening. Guardian PIN defaults to 1234 and can be customized in settings.")
+                ) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Owner PIN")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                            Text("*").foregroundColor(.red).font(.caption)
+                        }
+                        SecureField("Enter 4-digit PIN (e.g. 1234)", text: $pin)
+                            .keyboardType(.numberPad)
+                    }
+                    .padding(.vertical, 2)
+                     
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Call Screening Voice Passcode")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                            Text("*").foregroundColor(.red).font(.caption)
+                        }
+                        TextField("Enter Voice Passcode (e.g. apple or 1234)", text: $passcode)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    .padding(.vertical, 2)
+                }
+                 
+                // MARK: - Privacy Policy Agreement Section
+                Section(header: Text("Privacy & Legal")) {
+                    Toggle(isOn: $agreedToPolicy) {
+                        HStack(spacing: 4) {
+                            Text("I agree to the")
+                            Link("Privacy Policy", destination: URL(string: "https://mobilecallshield.com/privacy")!)
+                                .foregroundColor(.blue)
+                        }
+                        .font(.subheadline)
+                    }
+                    .padding(.vertical, 4)
+                }
+                 
+                // MARK: - Submit Section
+                Section {
+                    if !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                    }
+                     
+                    if !successMessage.isEmpty {
+                        Text(successMessage)
+                            .foregroundColor(.green)
+                    }
+                     
+                    Button(action: {
+                        performRegistration()
+                    }) {
+                        HStack {
+                            Spacer()
+                            if isLoading {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Text("Create Account")
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                            }
+                            Spacer()
+                        }
+                    }
+                    .padding()
+                    .background(isFormValid ? Color.blue : Color.gray)
+                    .cornerRadius(10)
+                    .disabled(!isFormValid || isLoading)
+                }
+            }
+            .navigationTitle("Register")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+     
+    private func selectPlacemark(_ placemark: CLPlacemark) {
+        showAddressSuggestions = false
+        searchManager.searchResults = []
+         
+        if let subThoroughfare = placemark.subThoroughfare, let thoroughfare = placemark.thoroughfare {
+            self.streetAddress = "\(subThoroughfare) \(thoroughfare)"
+        } else if let name = placemark.name {
+            self.streetAddress = name
+        }
+         
+        self.city = placemark.locality ?? ""
+        self.state = placemark.administrativeArea ?? ""
+        self.zipCode = placemark.postalCode ?? ""
+        self.country = placemark.country ?? "United States"
+    }
+
+    // MARK: - Helper Methods
+    private func standardizeState(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count == 2 {
+            return trimmed.uppercased()
+        }
+         
+        let states = [
+            "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+            "colorado": "CO", "connecticut": "CT", "delaware": "DE", "florida": "FL", "georgia": "GA",
+            "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+            "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+            "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS", "missouri": "MO",
+            "montana": "MT", "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
+            "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH",
+            "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+            "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+            "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY"
+        ]
+         
+        return states[trimmed.lowercased()] ?? trimmed.uppercased()
+    }
+
+    private func performRegistration() {
+        isLoading = true
+        errorMessage = ""
+        successMessage = ""
+
+        var formattedPhone = phoneNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+        if formattedPhone.count == 10 {
+            formattedPhone = "+1" + formattedPhone
+        } else if !formattedPhone.hasPrefix("+") {
+            formattedPhone = "+" + formattedPhone
+        }
+
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/auth/register") else {
+            isLoading = false
+            errorMessage = "Invalid server URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "name": name.trimmingCharacters(in: .whitespaces),
+            "phoneNumber": formattedPhone,
+            "email": email.trimmingCharacters(in: .whitespaces),
+            "password": password,
+            "streetAddress": streetAddress.trimmingCharacters(in: .whitespaces),
+            "city": city.trimmingCharacters(in: .whitespaces),
+            "state": standardizeState(state),
+            "zipCode": zipCode.trimmingCharacters(in: .whitespaces),
+            "country": country.trimmingCharacters(in: .whitespaces),
+            "pin": pin.trimmingCharacters(in: .whitespaces),
+            "passcode": passcode.trimmingCharacters(in: .whitespaces)
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                isLoading = false
+
+                if let error = error {
+                    errorMessage = "Network error: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data = data else {
+                    errorMessage = "No response from server."
+                    return
+                }
+
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let successFlag = json["success"] as? Bool ?? false
+                        if successFlag {
+                            successMessage = "Account created successfully! You can now log in."
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                dismiss()
+                            }
+                        } else {
+                            errorMessage = json["error"] as? String ?? "Registration failed."
+                        }
+                    }
+                } catch {
+                    errorMessage = "Failed to parse server response."
+                }
+            }
+        }.resume()
+    }
+}
+
+
+SessionStore
+
+import Foundation
+import Combine
+
+class SessionStore: ObservableObject {
+    @Published var userId: Int {
+        didSet {
+            UserDefaults.standard.set(userId, forKey: "userId")
+            print("[DEBUG - SessionStore] userId updated and saved to storage: \(userId)")
+        }
+    }
+    
+    @Published var isLoggedIn: Bool {
+        didSet {
+            UserDefaults.standard.set(isLoggedIn, forKey: "isLoggedIn")
+            print("[DEBUG - SessionStore] isLoggedIn status changed to: \(isLoggedIn)")
+        }
+    }
+
+    init() {
+        let storedId = UserDefaults.standard.integer(forKey: "userId")
+        // Default to 1 if no user ID is stored yet
+        self.userId = storedId == 0 ? 1 : storedId
+        self.isLoggedIn = UserDefaults.standard.bool(forKey: "isLoggedIn")
+        
+        print("[DEBUG - SessionStore] Initialized. Current active userId: \(self.userId) | Logged In: \(self.isLoggedIn)")
+    }
+    
+    func login(userId: Int) {
+        self.userId = userId
+        self.isLoggedIn = true
+        print("[DEBUG - SessionStore] 🟢 User successfully logged in. Assigned userId: \(userId)")
+    }
+    
+    func logout() {
+        self.userId = 1
+        self.isLoggedIn = false
+        print("[DEBUG - SessionStore] 🔴 User logged out. Reset to default userId: 1")
+    }
+}
+
+
+SettinssManager
+
+import Foundation
+import Combine
+
+class SettingsManager: ObservableObject {
+    static let shared = SettingsManager()
+    
+    @Published var isCallShieldEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isCallShieldEnabled, forKey: "isCallShieldEnabled")
+        }
+    }
+    
+    init() {
+        self.isCallShieldEnabled = UserDefaults.standard.object(forKey: "isCallShieldEnabled") as? Bool ?? true
+    }
+}
+
+
+ShieldSettings
+
+import Foundation
+import SwiftUI
+import Combine
+
+struct ShieldSettings: View {
+    @AppStorage("loggedInUserId") private var loggedInUserId: Int = 0
+    @AppStorage("isGuardianShieldActive") private var isGuardianShieldActive: Bool = true
+    
+    // Shield Toggle Passcode Prompt & Guardian check
+    @State private var showPinPrompt: Bool = false
+    @State private var pinPromptInput: String = ""
+    @State private var hasActiveGuardians: Bool = false
+
+    // Modal Presentation States
+    @State private var showChangeOwnerPinSheet: Bool = false
+    @State private var showChangePasscodeSheet: Bool = false
+
+    var body: some View {
+        Form {
+            // MARK: - Shield Controls Section
+            Section(
+                header: Text("Shield Controls"),
+                footer: Text(hasActiveGuardians ? "Only active guardians can turn off Guardian Shield." : "No Guardian assigned: Account owner can turn off Guardian Shield.")
+            ) {
+                Toggle(isOn: Binding(
+                    get: { isGuardianShieldActive },
+                    set: { newValue in
+                        if !newValue {
+                            if !hasActiveGuardians {
+                                toggleShieldOnBackend(isEnabled: false, pin: "")
+                            } else {
+                                pinPromptInput = ""
+                                showPinPrompt = true
+                            }
+                        } else {
+                            toggleShieldOnBackend(isEnabled: true, pin: "")
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Guardian Shield Active")
+                            .font(.headline)
+                        Text(isGuardianShieldActive ? "Call screening is actively protecting your device." : "Call screening is currently disabled.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .tint(.green)
+            }
+
+            // MARK: - Security Management (Owner PIN)
+            Section(header: Text("Security Management")) {
+                Button(action: {
+                    showChangeOwnerPinSheet = true
+                }) {
+                    HStack {
+                        Label("Change Owner PIN", systemImage: "key.fill")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                }
+            }
+
+            // MARK: - Owner Passcode (Voice Screening)
+            Section(
+                header: Text("Owner Passcode"),
+                footer: Text("Visitors must type or speak the exact word or phrase to pass call screening.")
+            ) {
+                Button(action: {
+                    showChangePasscodeSheet = true
+                }) {
+                    HStack {
+                        Label("Change Passcode Phrase", systemImage: "textformat")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Shield Settings")
+        .onAppear {
+            checkGuardiansStatus()
+        }
+        .sheet(isPresented: $showChangeOwnerPinSheet) {
+            ChangeOwnerPinView(userId: loggedInUserId)
+        }
+        .sheet(isPresented: $showChangePasscodeSheet) {
+            ChangePasscodePhraseView(userId: loggedInUserId)
+        }
+        // MARK: - PIN Verification Alert for Shield Toggle
+        .alert("Verify Passcode", isPresented: $showPinPrompt) {
+            SecureField("Guardian Passcode", text: $pinPromptInput)
+                .keyboardType(.numberPad)
+            Button("Cancel", role: .cancel) { }
+            Button("Disable Shield", role: .destructive) {
+                toggleShieldOnBackend(isEnabled: false, pin: pinPromptInput)
+            }
+        } message: {
+            Text("Enter the Guardian Passcode to disable call screening protection.")
+        }
+    }
+
+    // MARK: - Check if Guardians Exist
+    private func checkGuardiansStatus() {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/\(loggedInUserId)") else { return }
+        
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            guard let data = data else { return }
+            if let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                let guardianFound = array.contains { contact in
+                    let isGuardian = contact["is_guardian"] as? Bool ?? false
+                    return isGuardian
+                }
+                DispatchQueue.main.async {
+                    self.hasActiveGuardians = guardianFound
+                }
+            }
+        }.resume()
+    }
+
+    // MARK: - Toggle Shield Backend Call
+    private func toggleShieldOnBackend(isEnabled: Bool, pin: String) {
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/user/toggle-shield") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "userId": loggedInUserId,
+            "isEnabled": isEnabled,
+            "pin": pin.trimmingCharacters(in: .whitespaces)
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            DispatchQueue.main.async {
+                if let error = error { return }
+                guard let data = data else { return }
+
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let success = json["success"] as? Bool ?? false
+                        if success {
+                            isGuardianShieldActive = isEnabled
+                        }
+                    }
+                } catch {}
+            }
+        }.resume()
+    }
+}
+
+// MARK: - Change Owner PIN Modal View (Double-Verification Flow)
+struct ChangeOwnerPinView: View {
+    @Environment(\.dismiss) private var dismiss
+    let userId: Int
+
+    @State private var currentPin: String = ""
+    @State private var newPin: String = ""
+    @State private var confirmNewPin: String = ""
+
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String = ""
+    @State private var successMessage: String = ""
+
+    private var isValidInput: Bool {
+        !currentPin.isEmpty &&
+        !newPin.isEmpty &&
+        !confirmNewPin.isEmpty &&
+        (newPin == confirmNewPin)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Current Owner PIN")) {
+                    SecureField("Current Owner PIN", text: $currentPin)
+                        .keyboardType(.numberPad)
+                }
+
+                Section(
+                    header: Text("New Owner PIN"),
+                    footer: Text(newPin.isEmpty || confirmNewPin.isEmpty ? "" : (newPin == confirmNewPin ? "✓ PINs match" : "❌ New PINs do not match"))
+                ) {
+                    SecureField("New Owner PIN", text: $newPin)
+                        .keyboardType(.numberPad)
+
+                    SecureField("Confirm New Owner PIN", text: $confirmNewPin)
+                        .keyboardType(.numberPad)
+                }
+
+                if !errorMessage.isEmpty {
+                    Section {
+                        Text(errorMessage).foregroundColor(.red).font(.caption)
+                    }
+                }
+
+                if !successMessage.isEmpty {
+                    Section {
+                        Text(successMessage).foregroundColor(.green).font(.caption)
+                    }
+                }
+
+                Section {
+                    Button(action: submitOwnerPinChange) {
+                        HStack {
+                            Spacer()
+                            if isLoading {
+                                ProgressView()
+                            } else {
+                                Text("OK").fontWeight(.bold).foregroundColor(.white)
+                            }
+                            Spacer()
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .background(isValidInput && !isLoading ? Color.blue : Color.gray)
+                    .cornerRadius(10)
+                    .disabled(!isValidInput || isLoading)
+                }
+            }
+            .navigationTitle("Change Owner PIN")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func submitOwnerPinChange() {
+        isLoading = true
+        errorMessage = ""
+        successMessage = ""
+
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/user/update-owner-pin") else {
+            isLoading = false
+            errorMessage = "Invalid server URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "userId": userId,
+            "currentPin": currentPin.trimmingCharacters(in: .whitespaces),
+            "newPin": newPin.trimmingCharacters(in: .whitespaces)
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            DispatchQueue.main.async {
+                isLoading = false
+                if let error = error {
+                    errorMessage = "Network error: \(error.localizedDescription)"
+                    return
+                }
+                guard let data = data else {
+                    errorMessage = "No response from server."
+                    return
+                }
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let success = json["success"] as? Bool ?? false
+                        if success {
+                            successMessage = json["message"] as? String ?? "Owner PIN updated successfully!"
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                dismiss()
+                            }
+                        } else {
+                            errorMessage = json["error"] as? String ?? "Failed to update Owner PIN."
+                        }
+                    }
+                } catch {
+                    errorMessage = "Failed to parse server response."
+                }
+            }
+        }.resume()
+    }
+}
+
+// MARK: - Change Passcode Phrase Modal View (Double-Verification Flow)
+struct ChangePasscodePhraseView: View {
+    @Environment(\.dismiss) private var dismiss
+    let userId: Int
+
+    @State private var currentOwnerPin: String = ""
+    @State private var newPasscode: String = ""
+    @State private var confirmNewPasscode: String = ""
+
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String = ""
+    @State private var successMessage: String = ""
+
+    private var isValidInput: Bool {
+        !currentOwnerPin.isEmpty &&
+        !newPasscode.isEmpty &&
+        !confirmNewPasscode.isEmpty &&
+        (newPasscode == confirmNewPasscode)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Authorization"), footer: Text("Enter your Owner PIN to authorize changing the screening passphrase.")) {
+                    SecureField("Current Owner PIN", text: $currentOwnerPin)
+                        .keyboardType(.numberPad)
+                }
+
+                Section(
+                    header: Text("New Passcode Phrase"),
+                    footer: Text(newPasscode.isEmpty || confirmNewPasscode.isEmpty ? "" : (newPasscode == confirmNewPasscode ? "✓ Phrases match" : "❌ New phrases do not match"))
+                ) {
+                    TextField("New Passcode Phrase", text: $newPasscode)
+                        .textInputAutocapitalization(.never)
+
+                    TextField("Confirm New Passcode Phrase", text: $confirmNewPasscode)
+                        .textInputAutocapitalization(.never)
+                }
+
+                if !errorMessage.isEmpty {
+                    Section {
+                        Text(errorMessage).foregroundColor(.red).font(.caption)
+                    }
+                }
+
+                if !successMessage.isEmpty {
+                    Section {
+                        Text(successMessage).foregroundColor(.green).font(.caption)
+                    }
+                }
+
+                Section {
+                    Button(action: submitPasscodeChange) {
+                        HStack {
+                            Spacer()
+                            if isLoading {
+                                ProgressView()
+                            } else {
+                                Text("OK").fontWeight(.bold).foregroundColor(.white)
+                            }
+                            Spacer()
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .background(isValidInput && !isLoading ? Color.blue : Color.gray)
+                    .cornerRadius(10)
+                    .disabled(!isValidInput || isLoading)
+                }
+            }
+            .navigationTitle("Change Passcode Phrase")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func submitPasscodeChange() {
+        isLoading = true
+        errorMessage = ""
+        successMessage = ""
+
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/settings/update-passcode") else {
+            isLoading = false
+            errorMessage = "Invalid server URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "userId": userId,
+            "pin": currentOwnerPin.trimmingCharacters(in: .whitespaces),
+            "newPasscode": newPasscode.trimmingCharacters(in: .whitespaces)
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            DispatchQueue.main.async {
+                isLoading = false
+                if let error = error {
+                    errorMessage = "Network error: \(error.localizedDescription)"
+                    return
+                }
+                guard let data = data else {
+                    errorMessage = "No response from server."
+                    return
+                }
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        let success = json["success"] as? Bool ?? false
+                        if success {
+                            successMessage = json["message"] as? String ?? "Passcode Phrase updated successfully!"
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                dismiss()
+                            }
+                        } else {
+                            errorMessage = json["error"] as? String ?? "Failed to update Passcode Phrase."
+                        }
+                    }
+                } catch {
+                    errorMessage = "Failed to parse server response."
+                }
+            }
+        }.resume()
+    }
+}
+
+#Preview {
+    ShieldSettings()
+}
+
+
+SubscriptionManager
+
+import SwiftUI
+import SafariServices
+
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        return SFSafariViewController(url: url)
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
+}
+
+struct SubscribeView: View {
+    @AppStorage("loggedInUserId") private var loggedInUserId: Int = 1
+    @State private var areaCodeInput: String = ""
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String?
+    @State private var stripeURL: URL? = nil
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(.systemGroupedBackground)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 28) {
+                        // Header Illustration & Title
+                        VStack(spacing: 16) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.blue.opacity(0.12))
+                                    .frame(width: 90, height: 90)
+
+                                Image(systemName: "shield.fill")
+                                    .font(.system(size: 42))
+                                    .foregroundColor(.blue)
+                            }
+                            .padding(.top, 10)
+
+                            Text("Protect Your Line")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.primary)
+
+                            Text("Enter your local area code to activate your 24/7 automated scam shielding and secure phone routing.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 16)
+                        }
+
+                        // Form Card
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Local Area Code")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+
+                            TextField("e.g. 512", text: $areaCodeInput)
+                                .keyboardType(.numberPad)
+                                .padding()
+                                .background(Color(.systemBackground))
+                                .cornerRadius(10)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                                )
+
+                            if let error = errorMessage {
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
+
+                            Button(action: startCheckout) {
+                                HStack {
+                                    if isLoading {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    } else {
+                                        Text("Continue to Secure Checkout")
+                                            .fontWeight(.semibold)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(areaCodeInput.count == 3 ? Color.blue : Color.gray.opacity(0.6))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                            }
+                            .disabled(areaCodeInput.count != 3 || isLoading)
+                            .padding(.top, 4)
+                        }
+                        .padding(20)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(16)
+                        .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 4)
+                        .padding(.horizontal)
+
+                        Spacer()
+                    }
+                    .padding(.vertical)
+                }
+            }
+            .navigationTitle("Subscription")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .sheet(item: Binding(
+                get: { stripeURL.map { IdentifiableURL(url: $0) } },
+                set: { stripeURL = $0?.url }
+            )) { item in
+                SafariView(url: item.url)
+            }
+        }
+    }
+
+    private func startCheckout() {
+        isLoading = true
+        errorMessage = nil
+
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/create-checkout-session") else {
+            isLoading = false
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "userId": loggedInUserId,
+            "areaCode": areaCodeInput
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                isLoading = false
+                if let error = error {
+                    errorMessage = "Network error: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let urlString = json["url"] as? String,
+                      let checkoutUrl = URL(string: urlString) else {
+                    errorMessage = "Failed to start checkout session."
+                    return
+                }
+
+                self.stripeURL = checkoutUrl
+            }
+        }.resume()
+    }
+}
+
+struct IdentifiableURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+
+VoIPManager
+
+import Foundation
+import UserNotifications
+import PushKit
+import CallKit
+
+class VoIPManager: NSObject, PKPushRegistryDelegate, UNUserNotificationCenterDelegate {
+    static let shared = VoIPManager()
+    
+    override init() {
+        super.init()
+        // Set delegate for local notification center
+        UNUserNotificationCenter.current().delegate = self
+    }
+    
+    // MARK: - UNUserNotificationCenterDelegate Required Methods
+    
+    // Handles notification presentation while the app is in the foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .badge])
+    }
+    
+    // Handles user interaction with notifications
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        completionHandler()
+    }
+    
+    // MARK: - PKPushRegistryDelegate Methods
+    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
+        completion()
+    }
+    
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+        // Handle VoIP push token update
+    }
+}

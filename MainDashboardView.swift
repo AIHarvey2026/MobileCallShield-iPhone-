@@ -88,8 +88,8 @@ struct MainDashboardView: View {
                              
                             // Admin Control Panel (Hidden UNLESS logged-in user is Admin)
                             if isAdmin || userRole.lowercased() == "admin" {
-                                NavigationLink(destination: AdminDashboardView()) {
-                                    DashboardCard(icon: "gearshape.2.fill", iconColor: .orange, title: "Adminstration Settings")
+                                NavigationLink(destination: AdminDashboardHubView()) { // <--- Now goes to the Hub!
+                                    DashboardCard(icon: "gearshape.2.fill", iconColor: .orange, title: "Administration Settings")
                                 }
                             }
                         }

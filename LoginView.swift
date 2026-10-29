@@ -72,7 +72,7 @@ struct LoginView: View {
                      
                     // Input Fields Card
                     VStack(spacing: 16) {
-                        TextField("User Name (Email)", text: $username)
+                        TextField("Email", text: $username)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .padding()
@@ -214,76 +214,96 @@ struct LoginView: View {
     }
 
     private func performLogin() {
-        isLoading = true
-        errorMessage = ""
-         
-        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/auth/login") else {
-            isLoading = false
-            errorMessage = "Invalid server URL."
-            return
-        }
-         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-         
-        let body: [String: Any] = [
-            "email": username.trimmingCharacters(in: .whitespaces),
-            "password": password
-        ]
-         
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
+            isLoading = true
+            errorMessage = ""
+             
+            guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/auth/login") else {
                 isLoading = false
-                 
-                if let error = error {
-                    errorMessage = "Network error: \(error.localizedDescription)"
-                    return
-                }
-                 
-                guard let data = data else {
-                    errorMessage = "No response from server."
-                    return
-                }
-                 
-                do {
-                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        let successFlag = json["success"] as? Bool ?? false
-                         
-                        if successFlag {
-                            let resolvedUserId: Int
-                            if let userDict = json["user"] as? [String: Any],
-                               let userId = userDict["id"] as? Int {
-                                resolvedUserId = userId
-                                userRole = (userDict["role"] as? String) ?? "user"
-                                isAdmin = userRole.lowercased() == "admin"
-                            } else {
-                                resolvedUserId = 1
-                            }
-                            
-                            // Save to legacy AppStorage keys if needed
-                            loggedInUserId = resolvedUserId
-                            
-                            // UPDATE SESSION STORE: This instantly updates the global session & triggers prints!
-                            session.login(userId: resolvedUserId)
-                            print("[DEBUG - LoginView] Successfully logged in and assigned userId: \(resolvedUserId)")
-                            
-                        } else {
-                            let serverError = json["error"] as? String ?? "Unknown server rejection."
-                            errorMessage = serverError
-                        }
-                    } else {
-                        errorMessage = "Invalid response format from server."
-                    }
-                } catch {
-                    errorMessage = "Failed to parse response."
-                }
+                errorMessage = "Invalid server URL."
+                return
             }
-        }.resume()
-    }
+             
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+             
+            let body: [String: Any] = [
+                "email": username.trimmingCharacters(in: .whitespaces),
+                "password": password
+            ]
+             
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+             
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                DispatchQueue.main.async {
+                    isLoading = false
+                     
+                    if let error = error {
+                        errorMessage = "Network error: \(error.localizedDescription)"
+                        return
+                    }
+                     
+                    guard let data = data else {
+                        errorMessage = "No response from server."
+                        return
+                    }
+                     
+                    // DEBUG: Print the raw string response from the backend server
+                    if let rawString = String(data: data, encoding: .utf8) {
+                        print("[DEBUG - LoginView] Raw server response body: \(rawString)")
+                    }
+                     
+                    do {
+                        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            let successFlag = json["success"] as? Bool ?? false
+                             
+                            if successFlag {
+                                // Extract token from any possible location
+                                let extractedToken = json["token"] as? String
+                                                  ?? json["accessToken"] as? String
+                                                  ?? json["access_token"] as? String
+                                                  ?? json["jwt"] as? String
+                                                  ?? (json["user"] as? [String: Any])?["token"] as? String
+                                                  ?? (json["user"] as? [String: Any])?["accessToken"] as? String
 
+                                if let token = extractedToken {
+                                    UserDefaults.standard.set(token, forKey: "token")
+                                    print("[DEBUG - LoginView] Successfully found and saved auth token!")
+                                } else {
+                                    print("[DEBUG ERROR] Login succeeded, but NO token was found in the JSON response structure!")
+                                }
+
+                                let resolvedUserId: Int
+                                if let userDict = json["user"] as? [String: Any],
+                                   let userId = userDict["id"] as? Int {
+                                    resolvedUserId = userId
+                                    
+                                    let serverIsAdmin = userDict["isAdmin"] as? Bool ?? false
+                                    let serverRole = (userDict["role"] as? String) ?? "user"
+                                    
+                                    userRole = serverRole
+                                    isAdmin = serverIsAdmin || serverRole.lowercased() == "admin"
+                                } else {
+                                    resolvedUserId = 1
+                                }
+                                 
+                                loggedInUserId = resolvedUserId
+                                session.login(userId: resolvedUserId)
+                                print("[DEBUG - LoginView] Successfully logged in as userId: \(resolvedUserId), isAdmin: \(isAdmin)")
+                                 
+                            } else {
+                                let serverError = json["error"] as? String ?? "Unknown server rejection."
+                                errorMessage = serverError
+                            }
+                        } else {
+                            errorMessage = "Invalid response format from server."
+                        }
+                    } catch {
+                        errorMessage = "Failed to parse response."
+                    }
+                }
+            }.resume()
+        }
     private func sendPasswordResetRequest() {
         guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/forgot-password") else { return }
          

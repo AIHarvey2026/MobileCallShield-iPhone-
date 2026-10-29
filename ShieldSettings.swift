@@ -14,15 +14,83 @@ struct ShieldSettings: View {
     // Modal Presentation States
     @State private var showChangeOwnerPinSheet: Bool = false
     @State private var showChangePasscodeSheet: Bool = false
+    @State private var showDeactivateAlert: Bool = false
+    @State private var deactivatePinInput: String = ""
 
     var body: some View {
-        Form {
-            // MARK: - Shield Controls Section
-            Section(
-                header: Text("Shield Controls"),
-                footer: Text(hasActiveGuardians ? "Only active guardians can turn off Guardian Shield." : "No Guardian assigned: Account owner can turn off Guardian Shield.")
-            ) {
-                Toggle(isOn: Binding(
+        NavigationStack {
+            ZStack {
+                Color(uiColor: .systemGroupedBackground)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        shieldControlsCard
+                        securityManagementCard
+                        ownerPasscodeCard
+                        carrierManagementCard
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("Shield Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                checkGuardiansStatus()
+            }
+            .sheet(isPresented: $showChangeOwnerPinSheet) {
+                ChangeOwnerPinView(userId: loggedInUserId)
+            }
+            .sheet(isPresented: $showChangePasscodeSheet) {
+                ChangePasscodePhraseView(userId: loggedInUserId)
+            }
+            .alert("Verify Passcode", isPresented: $showPinPrompt) {
+                SecureField("Guardian Passcode", text: $pinPromptInput)
+                    .keyboardType(.numberPad)
+                Button("Cancel", role: .cancel) { }
+                Button("Disable Shield", role: .destructive) {
+                    toggleShieldOnBackend(isEnabled: false, pin: pinPromptInput)
+                }
+            } message: {
+                Text("Enter the Guardian Passcode to disable call screening protection.")
+            }
+            .alert("Deactivate Account", isPresented: $showDeactivateAlert) {
+                SecureField("Guardian PIN (if required)", text: $deactivatePinInput)
+                    .keyboardType(.numberPad)
+                Button("Deactivate", role: .destructive) {
+                    deactivatePinInput = ""
+                }
+                Button("Cancel", role: .cancel) {
+                    deactivatePinInput = ""
+                }
+            } message: {
+                Text("This will stop your subscription and deactivate your account. Enter your Guardian PIN if assigned.")
+            }
+        }
+    }
+
+    // MARK: - Subviews (Broken down for compiler efficiency)
+
+    private var shieldControlsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isGuardianShieldActive ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
+                        .frame(width: 44, height: 44)
+
+                    Image(systemName: "shield.fill")
+                        .foregroundColor(isGuardianShieldActive ? .green : .red)
+                        .font(.title3)
+                }
+
+                Text("Guardian Shield Active")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.primary)
+
+                Spacer()
+
+                Toggle("", isOn: Binding(
                     get: { isGuardianShieldActive },
                     set: { newValue in
                         if !newValue {
@@ -36,77 +104,166 @@ struct ShieldSettings: View {
                             toggleShieldOnBackend(isEnabled: true, pin: "")
                         }
                     }
-                )) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Guardian Shield Active")
-                            .font(.headline)
-                        Text(isGuardianShieldActive ? "Call screening is actively protecting your device." : "Call screening is currently disabled.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
+                ))
+                .labelsHidden()
                 .tint(.green)
             }
 
-            // MARK: - Security Management (Owner PIN)
-            Section(header: Text("Security Management")) {
-                Button(action: {
-                    showChangeOwnerPinSheet = true
-                }) {
-                    HStack {
-                        Label("Change Owner PIN", systemImage: "key.fill")
-                            .foregroundColor(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.gray)
-                            .font(.caption)
-                    }
-                }
-            }
-
-            // MARK: - Owner Passcode (Voice Screening)
-            Section(
-                header: Text("Owner Passcode"),
-                footer: Text("Visitors must type or speak the exact word or phrase to pass call screening.")
-            ) {
-                Button(action: {
-                    showChangePasscodeSheet = true
-                }) {
-                    HStack {
-                        Label("Change Passcode Phrase", systemImage: "textformat")
-                            .foregroundColor(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.gray)
-                            .font(.caption)
-                    }
-                }
-            }
+            Text(hasActiveGuardians ? "Only active guardians can turn off Guardian Shield." : "No Guardian assigned: Account owner can turn off Guardian Shield. If Guardians assigned, only primary Guardian can turn off Guardian Shield.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
         }
-        .navigationTitle("Shield Settings")
-        .onAppear {
-            checkGuardiansStatus()
-        }
-        .sheet(isPresented: $showChangeOwnerPinSheet) {
-            ChangeOwnerPinView(userId: loggedInUserId)
-        }
-        .sheet(isPresented: $showChangePasscodeSheet) {
-            ChangePasscodePhraseView(userId: loggedInUserId)
-        }
-        // MARK: - PIN Verification Alert for Shield Toggle
-        .alert("Verify Passcode", isPresented: $showPinPrompt) {
-            SecureField("Guardian Passcode", text: $pinPromptInput)
-                .keyboardType(.numberPad)
-            Button("Cancel", role: .cancel) { }
-            Button("Disable Shield", role: .destructive) {
-                toggleShieldOnBackend(isEnabled: false, pin: pinPromptInput)
-            }
-        } message: {
-            Text("Enter the Guardian Passcode to disable call screening protection.")
-        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
     }
 
-    // MARK: - Check if Guardians Exist
+    private var securityManagementCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Security Management")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.secondary)
+
+            Button(action: {
+                showChangeOwnerPinSheet = true
+            }) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.blue.opacity(0.15))
+                            .frame(width: 40, height: 40)
+
+                        Image(systemName: "key.fill")
+                            .foregroundColor(.blue)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Change Owner PIN")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(.primary)
+
+                        Text("You must enter your current PIN to set a new security PIN.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+    }
+
+    private var ownerPasscodeCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Owner Passcode")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.secondary)
+
+            Button(action: {
+                showChangePasscodeSheet = true
+            }) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.blue.opacity(0.15))
+                            .frame(width: 40, height: 40)
+
+                        Image(systemName: "textformat")
+                            .foregroundColor(.blue)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Change Passcode Phrase")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(.primary)
+
+                        Text("Visitors must type the exact word or phrase to pass call screening.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+    }
+
+    private var carrierManagementCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Carrier & Account Management")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.secondary)
+
+            Button(action: {
+                // Carrier re-configuration action
+            }) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.blue.opacity(0.15))
+                            .frame(width: 40, height: 40)
+
+                        Image(systemName: "phone.arrow.right.fill")
+                            .foregroundColor(.blue)
+                    }
+
+                    Text("Re-configure Carrier Activation")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+            }
+
+            Divider()
+
+            Button(action: {
+                showDeactivateAlert = true
+            }) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.red.opacity(0.15))
+                            .frame(width: 40, height: 40)
+
+                        Image(systemName: "trash.fill")
+                            .foregroundColor(.red)
+                    }
+
+                    Text("Deactivate Account & Cancel Subscription")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.red)
+
+                    Spacer()
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+    }
+
+    // MARK: - Backend Actions
     private func checkGuardiansStatus() {
         guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/\(loggedInUserId)") else { return }
         
@@ -114,8 +271,7 @@ struct ShieldSettings: View {
             guard let data = data else { return }
             if let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                 let guardianFound = array.contains { contact in
-                    let isGuardian = contact["is_guardian"] as? Bool ?? false
-                    return isGuardian
+                    return contact["is_guardian"] as? Bool ?? false
                 }
                 DispatchQueue.main.async {
                     self.hasActiveGuardians = guardianFound
@@ -124,7 +280,6 @@ struct ShieldSettings: View {
         }.resume()
     }
 
-    // MARK: - Toggle Shield Backend Call
     private func toggleShieldOnBackend(isEnabled: Bool, pin: String) {
         guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/user/toggle-shield") else { return }
 
@@ -158,7 +313,7 @@ struct ShieldSettings: View {
     }
 }
 
-// MARK: - Change Owner PIN Modal View (Double-Verification Flow)
+// MARK: - Change Owner PIN Modal View
 struct ChangeOwnerPinView: View {
     @Environment(\.dismiss) private var dismiss
     let userId: Int
@@ -291,7 +446,7 @@ struct ChangeOwnerPinView: View {
     }
 }
 
-// MARK: - Change Passcode Phrase Modal View (Double-Verification Flow)
+// MARK: - Change Passcode Phrase Modal View
 struct ChangePasscodePhraseView: View {
     @Environment(\.dismiss) private var dismiss
     let userId: Int

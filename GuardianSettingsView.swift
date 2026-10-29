@@ -1,108 +1,66 @@
 import Foundation
 import SwiftUI
-import Contacts
 
 // MARK: - Guardian Settings View
 struct GuardianSettingsView: View {
     let currentUserId: Int
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var service = GuardianService()
 
     @State private var showingAddGuardianAlert = false
     @State private var newGuardianName = ""
     @State private var newGuardianPhone = ""
     
+    // Guardian Protection Shield Toggle State
+    @State private var isGuardianShieldActive: Bool = true
+    
     // Sheet presentation state for Guardian Code update
     @State private var showChangeGuardianCodeSheet = false
     
-    // One-time phone contacts sync state (persists across app launches)
-    @AppStorage("hasSyncedPhoneContacts") private var hasSyncedPhoneContacts: Bool = false
-    @State private var isSyncingContacts: Bool = false
+    // Authorization PIN Alert State for Report Sending
+    @State private var showPinForReportAlert = false
+    @State private var pinForReportInput = ""
+    @State private var isSendingReport = false
+    @State private var reportStatusMessage: String? = nil
 
     var body: some View {
-        NavigationView {
-            Form {
-                // MARK: - Phone Contacts Sync Section (One-Time Use)
-                Section(
-                    header: Text("Device Contacts"),
-                    footer: Text(hasSyncedPhoneContacts ? "Phone contacts have already been synced to your trusted list." : "Import all contacts from your phone once to populate your trusted list.")
-                ) {
-                    Button(action: {
-                        syncAllPhoneContacts()
-                    }) {
-                        HStack {
-                            Image(systemName: hasSyncedPhoneContacts ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                            Text(hasSyncedPhoneContacts ? "Contacts Already Synced" : "Sync All Phone Contacts")
-                                .fontWeight(.bold)
-                            Spacer()
-                            if isSyncingContacts {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(hasSyncedPhoneContacts || isSyncingContacts)
-                    .tint(hasSyncedPhoneContacts ? .gray : .blue)
-                }
+        NavigationStack {
+            ZStack {
+                Color(uiColor: .systemGroupedBackground)
+                    .ignoresSafeArea()
 
-                // MARK: - Guardian Code Management Section
-                Section(
-                    header: Text("Guardian Security"),
-                    footer: Text("Manage your Guardian Code used to authorize high-security app actions.")
-                ) {
-                    Button(action: {
-                        showChangeGuardianCodeSheet = true
-                    }) {
-                        HStack {
-                            Label("Change Guardian Code", systemImage: "key.fill")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundColor(.gray)
-                                .font(.caption)
-                        }
+                ScrollView {
+                    VStack(spacing: 16) {
+                        protectionCard
+                        guardiansCard
+                        reportsCard
+                        securityCard
                     }
-                }
-
-                // MARK: - Registered Guardians Section
-                Section(header: Text("Registered Guardians")) {
-                    if service.isLoading {
-                        ProgressView()
-                    } else if service.guardians.isEmpty {
-                        Text("No guardians assigned yet.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(service.guardians) { guardian in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(guardian.guardian_name)
-                                        .font(.headline)
-                                    Text(guardian.guardian_phone)
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "shield.fill")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                        .onDelete { indexSet in
-                            for index in indexSet {
-                                let guardian = service.guardians[index]
-                                if let id = guardian.id {
-                                    service.deleteGuardian(id: id, userId: currentUserId) { _ in }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Section {
-                    Button(action: {
-                        showingAddGuardianAlert = true
-                    }) {
-                        Label("Add Guardian Manually", systemImage: "person.badge.plus")
-                    }
+                    .padding(16)
                 }
             }
             .navigationTitle("Guardian Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { dismiss() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        service.fetchGuardians(userId: currentUserId)
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
             .onAppear {
                 service.fetchGuardians(userId: currentUserId)
             }
@@ -127,22 +85,255 @@ struct GuardianSettingsView: View {
             } message: {
                 Text("Enter the name and phone number of the guardian.")
             }
-        }
-    }
-    
-    // MARK: - Sync Action Handler
-    private func syncAllPhoneContacts() {
-        isSyncingContacts = true
-        
-        ContactSyncManager.syncDeviceContacts(userId: currentUserId) { success, message in
-            isSyncingContacts = false
-            if success {
-                hasSyncedPhoneContacts = true // Permanently locks the button
-                print(message)
-            } else {
-                print("Sync error: \(message)")
+            .alert("Authorize Report Dispatch", isPresented: $showPinForReportAlert) {
+                SecureField("Enter Guardian Code", text: $pinForReportInput)
+                    .keyboardType(.numberPad)
+                Button("Send Report") {
+                    sendCallLogsReport(pin: pinForReportInput)
+                    pinForReportInput = ""
+                }
+                Button("Cancel", role: .cancel) {
+                    pinForReportInput = ""
+                }
+            } message: {
+                Text("Enter your Guardian Code to email recent call history and voicemails to registered guardians.")
             }
         }
+    }
+
+    // MARK: - Subviews (Broken down for type-checker efficiency)
+    
+    private var protectionCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isGuardianShieldActive ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
+                        .frame(width: 44, height: 44)
+
+                    Image(systemName: "shield.fill")
+                        .foregroundColor(isGuardianShieldActive ? .green : .red)
+                        .font(.title3)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Guardian Protection")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.primary)
+
+                    Text(isGuardianShieldActive ? "Scam call screening active" : "Screening currently paused")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Toggle("", isOn: $isGuardianShieldActive)
+                    .labelsHidden()
+                    .tint(.green)
+            }
+            .padding(16)
+        }
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+    }
+
+    private var guardiansCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Assigned Guardians (\(service.guardians.count))")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button(action: {
+                    showingAddGuardianAlert = true
+                }) {
+                    Label("Add Guardian", systemImage: "plus.circle.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.blue)
+                }
+            }
+
+            if service.isLoading {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+            } else if service.guardians.isEmpty {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.orange.opacity(0.15))
+                            .frame(width: 44, height: 44)
+
+                        Image(systemName: "person.fill")
+                            .foregroundColor(.orange)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("No Guardians Assigned")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.primary)
+
+                        Text("Mark contacts as Guardian in Trusted Contacts")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(service.guardians) { guardian in
+                        HStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color.green.opacity(0.15))
+                                    .frame(width: 40, height: 40)
+
+                                Image(systemName: "shield.fill")
+                                    .foregroundColor(.green)
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(guardian.guardian_name)
+                                    .font(.system(size: 15, weight: .bold))
+
+                                Text(guardian.guardian_phone)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button(action: {
+                                if let id = guardian.id {
+                                    service.deleteGuardian(id: id, userId: currentUserId) { _ in }
+                                }
+                            }) {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red.opacity(0.7))
+                                    .font(.system(size: 14))
+                            }
+                        }
+                        Divider()
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+    }
+
+    private var reportsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Guardian Reports")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.secondary)
+
+            Text("Dispatch a recent call history summary and voicemail recordings to all registered guardian email addresses.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+
+            if let status = reportStatusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(status.contains("successfully") ? .green : .red)
+            }
+
+            Button(action: {
+                showPinForReportAlert = true
+            }) {
+                HStack {
+                    if isSendingReport {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "envelope.fill")
+                        Text("Send Call Logs to Guardian(s)")
+                            .fontWeight(.bold)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(service.guardians.isEmpty ? Color(.systemGray4) : Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+            .disabled(service.guardians.isEmpty || isSendingReport)
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+    }
+
+    private var securityCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Guardian Security")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.secondary)
+
+            Button(action: {
+                showChangeGuardianCodeSheet = true
+            }) {
+                HStack {
+                    Label("Change Guardian Code", systemImage: "key.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+    }
+
+    // MARK: - Actions
+    private func sendCallLogsReport(pin: String) {
+        isSendingReport = true
+        reportStatusMessage = nil
+
+        guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/guardians/send-report") else {
+            isSendingReport = false
+            reportStatusMessage = "Invalid server URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
+            "userId": currentUserId,
+            "guardianPin": pin,
+            "reportType": "7days"
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            DispatchQueue.main.async {
+                isSendingReport = false
+                if let error = error {
+                    reportStatusMessage = "Error: \(error.localizedDescription)"
+                    return
+                }
+
+                if (response as? HTTPURLResponse)?.statusCode == 200 {
+                    reportStatusMessage = "Report dispatched successfully to guardians!"
+                } else {
+                    reportStatusMessage = "Failed to dispatch report. Verify Guardian Code."
+                }
+            }
+        }.resume()
     }
 }
 
@@ -167,7 +358,7 @@ struct ChangeGuardianCodeView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section(header: Text("Current Guardian Code")) {
                     SecureField("Current Guardian Code", text: $currentCode)
