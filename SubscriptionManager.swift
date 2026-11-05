@@ -1,4 +1,6 @@
 
+// File Name: SubscribeView.swift
+
 import SwiftUI
 import SafariServices
 
@@ -21,103 +23,114 @@ struct SubscribeView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color(.systemGroupedBackground)
-                    .ignoresSafeArea()
+        ZStack {
+            Color(.systemGroupedBackground)
+                .ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: 28) {
-                        // Header Illustration & Title
-                        VStack(spacing: 16) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.12))
-                                    .frame(width: 90, height: 90)
+            ScrollView {
+                VStack(spacing: 28) {
+                    // Header Illustration & Title
+                    VStack(spacing: 16) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.blue.opacity(0.12))
+                                .frame(width: 90, height: 90)
 
-                                Image(systemName: "shield.fill")
-                                    .font(.system(size: 42))
-                                    .foregroundColor(.blue)
-                            }
-                            .padding(.top, 10)
-
-                            Text("Protect Your Line")
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.primary)
-
-                            Text("Enter your local area code to activate your 24/7 automated scam shielding and secure phone routing.")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 16)
+                            Image(systemName: "shield.fill")
+                                .font(.system(size: 42))
+                                .foregroundColor(.blue)
                         }
+                        .padding(.top, 10)
 
-                        // Form Card
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Local Area Code")
-                                .font(.headline)
-                                .foregroundColor(.primary)
+                        Text("Protect Your Line")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
 
-                            TextField("e.g. 512", text: $areaCodeInput)
-                                .keyboardType(.numberPad)
-                                .padding()
-                                .background(Color(.systemBackground))
-                                .cornerRadius(10)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                                )
-
-                            if let error = errorMessage {
-                                Text(error)
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                            }
-
-                            Button(action: startCheckout) {
-                                HStack {
-                                    if isLoading {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    } else {
-                                        Text("Continue to Secure Checkout")
-                                            .fontWeight(.semibold)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(areaCodeInput.count == 3 ? Color.blue : Color.gray.opacity(0.6))
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
-                            }
-                            .disabled(areaCodeInput.count != 3 || isLoading)
-                            .padding(.top, 4)
-                        }
-                        .padding(20)
-                        .background(Color(.systemBackground))
-                        .cornerRadius(16)
-                        .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 4)
-                        .padding(.horizontal)
-
-                        Spacer()
+                        Text("Enter your local area code to activate your 24/7 automated scam shielding and secure phone routing.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
                     }
-                    .padding(.vertical)
+
+                    // Form Card
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Local Area Code")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+
+                        TextField("e.g. 512", text: $areaCodeInput)
+                            .keyboardType(.numberPad)
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .cornerRadius(10)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                            )
+
+                        if let error = errorMessage {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+
+                        Button(action: startCheckout) {
+                            HStack {
+                                if isLoading {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                } else {
+                                    Text("Continue to Secure Checkout")
+                                        .fontWeight(.semibold)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(areaCodeInput.count == 3 ? Color.blue : Color.gray.opacity(0.6))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        }
+                        .disabled(areaCodeInput.count != 3 || isLoading)
+                        .padding(.top, 4)
+                    }
+                    .padding(20)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 4)
+                    .padding(.horizontal)
+
+                    Spacer()
+                }
+                .padding(.vertical)
+            }
+        }
+        .navigationTitle("Subscription")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: { dismiss() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("Close")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color(uiColor: .tertiarySystemFill))
+                    .cornerRadius(20)
                 }
             }
-            .navigationTitle("Subscription")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-            }
-            .sheet(item: Binding(
-                get: { stripeURL.map { IdentifiableURL(url: $0) } },
-                set: { stripeURL = $0?.url }
-            )) { item in
-                SafariView(url: item.url)
-            }
+        }
+        .sheet(item: Binding(
+            get: { stripeURL.map { IdentifiableURL(url: $0) } },
+            set: { stripeURL = $0?.url }
+        )) { item in
+            SafariView(url: item.url)
         }
     }
 

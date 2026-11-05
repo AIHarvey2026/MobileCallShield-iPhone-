@@ -1,8 +1,11 @@
+// File Name: ShieldSettings.swift
+
 import Foundation
 import SwiftUI
 import Combine
 
 struct ShieldSettings: View {
+    @Environment(\.dismiss) private var dismiss
     @AppStorage("loggedInUserId") private var loggedInUserId: Int = 0
     @AppStorage("isGuardianShieldActive") private var isGuardianShieldActive: Bool = true
     
@@ -18,58 +21,74 @@ struct ShieldSettings: View {
     @State private var deactivatePinInput: String = ""
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color(uiColor: .systemGroupedBackground)
-                    .ignoresSafeArea()
+        ZStack {
+            Color(uiColor: .systemGroupedBackground)
+                .ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: 16) {
-                        shieldControlsCard
-                        securityManagementCard
-                        ownerPasscodeCard
-                        carrierManagementCard
+            ScrollView {
+                VStack(spacing: 16) {
+                    shieldControlsCard
+                    securityManagementCard
+                    ownerPasscodeCard
+                    carrierManagementCard
+                }
+                .padding(16)
+            }
+        }
+        .navigationTitle("Shield Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: { dismiss() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .bold))
+                        Text("Back")
+                            .font(.system(size: 16, weight: .bold))
                     }
-                    .padding(16)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color(uiColor: .tertiarySystemFill))
+                    .cornerRadius(20)
                 }
             }
-            .navigationTitle("Shield Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                checkGuardiansStatus()
+        }
+        .onAppear {
+            checkGuardiansStatus()
+        }
+        .sheet(isPresented: $showChangeOwnerPinSheet) {
+            ChangeOwnerPinView(userId: loggedInUserId)
+        }
+        .sheet(isPresented: $showChangePasscodeSheet) {
+            ChangePasscodePhraseView(userId: loggedInUserId)
+        }
+        .alert("Verify Passcode", isPresented: $showPinPrompt) {
+            SecureField("Guardian Passcode", text: $pinPromptInput)
+                .keyboardType(.numberPad)
+            Button("Cancel", role: .cancel) { }
+            Button("Disable Shield", role: .destructive) {
+                toggleShieldOnBackend(isEnabled: false, pin: pinPromptInput)
             }
-            .sheet(isPresented: $showChangeOwnerPinSheet) {
-                ChangeOwnerPinView(userId: loggedInUserId)
+        } message: {
+            Text("Enter the Guardian Passcode to disable call screening protection.")
+        }
+        .alert("Deactivate Account", isPresented: $showDeactivateAlert) {
+            SecureField("Guardian PIN (if required)", text: $deactivatePinInput)
+                .keyboardType(.numberPad)
+            Button("Deactivate", role: .destructive) {
+                deactivatePinInput = ""
             }
-            .sheet(isPresented: $showChangePasscodeSheet) {
-                ChangePasscodePhraseView(userId: loggedInUserId)
+            Button("Cancel", role: .cancel) {
+                deactivatePinInput = ""
             }
-            .alert("Verify Passcode", isPresented: $showPinPrompt) {
-                SecureField("Guardian Passcode", text: $pinPromptInput)
-                    .keyboardType(.numberPad)
-                Button("Cancel", role: .cancel) { }
-                Button("Disable Shield", role: .destructive) {
-                    toggleShieldOnBackend(isEnabled: false, pin: pinPromptInput)
-                }
-            } message: {
-                Text("Enter the Guardian Passcode to disable call screening protection.")
-            }
-            .alert("Deactivate Account", isPresented: $showDeactivateAlert) {
-                SecureField("Guardian PIN (if required)", text: $deactivatePinInput)
-                    .keyboardType(.numberPad)
-                Button("Deactivate", role: .destructive) {
-                    deactivatePinInput = ""
-                }
-                Button("Cancel", role: .cancel) {
-                    deactivatePinInput = ""
-                }
-            } message: {
-                Text("This will stop your subscription and deactivate your account. Enter your Guardian PIN if assigned.")
-            }
+        } message: {
+            Text("This will stop your subscription and deactivate your account. Enter your Guardian PIN if assigned.")
         }
     }
 
-    // MARK: - Subviews (Broken down for compiler efficiency)
+    // MARK: - Subviews
 
     private var shieldControlsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -210,9 +229,7 @@ struct ShieldSettings: View {
                 .font(.system(size: 14, weight: .bold))
                 .foregroundColor(.secondary)
 
-            Button(action: {
-                // Carrier re-configuration action
-            }) {
+            Button(action: { }) {
                 HStack(spacing: 14) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 12)
@@ -264,9 +281,10 @@ struct ShieldSettings: View {
     }
 
     // MARK: - Backend Actions
+
     private func checkGuardiansStatus() {
         guard let url = URL(string: "https://mobilecallshield-backend.onrender.com/api/trusted-contacts/\(loggedInUserId)") else { return }
-        
+         
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data = data else { return }
             if let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
@@ -295,11 +313,9 @@ struct ShieldSettings: View {
 
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        URLSession.shared.dataTask(with: request) { data, _, error in
+        URLSession.shared.dataTask(with: request) { data, _, _ in
             DispatchQueue.main.async {
-                if let error = error { return }
                 guard let data = data else { return }
-
                 do {
                     if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                         let success = json["success"] as? Bool ?? false
@@ -327,10 +343,7 @@ struct ChangeOwnerPinView: View {
     @State private var successMessage: String = ""
 
     private var isValidInput: Bool {
-        !currentPin.isEmpty &&
-        !newPin.isEmpty &&
-        !confirmNewPin.isEmpty &&
-        (newPin == confirmNewPin)
+        !currentPin.isEmpty && !newPin.isEmpty && !confirmNewPin.isEmpty && (newPin == confirmNewPin)
     }
 
     var body: some View {
@@ -353,15 +366,11 @@ struct ChangeOwnerPinView: View {
                 }
 
                 if !errorMessage.isEmpty {
-                    Section {
-                        Text(errorMessage).foregroundColor(.red).font(.caption)
-                    }
+                    Section { Text(errorMessage).foregroundColor(.red).font(.caption) }
                 }
 
                 if !successMessage.isEmpty {
-                    Section {
-                        Text(successMessage).foregroundColor(.green).font(.caption)
-                    }
+                    Section { Text(successMessage).foregroundColor(.green).font(.caption) }
                 }
 
                 Section {
@@ -431,9 +440,7 @@ struct ChangeOwnerPinView: View {
                         let success = json["success"] as? Bool ?? false
                         if success {
                             successMessage = json["message"] as? String ?? "Owner PIN updated successfully!"
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                dismiss()
-                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { dismiss() }
                         } else {
                             errorMessage = json["error"] as? String ?? "Failed to update Owner PIN."
                         }
@@ -460,10 +467,7 @@ struct ChangePasscodePhraseView: View {
     @State private var successMessage: String = ""
 
     private var isValidInput: Bool {
-        !currentOwnerPin.isEmpty &&
-        !newPasscode.isEmpty &&
-        !confirmNewPasscode.isEmpty &&
-        (newPasscode == confirmNewPasscode)
+        !currentOwnerPin.isEmpty && !newPasscode.isEmpty && !confirmNewPasscode.isEmpty && (newPasscode == confirmNewPasscode)
     }
 
     var body: some View {
@@ -486,15 +490,11 @@ struct ChangePasscodePhraseView: View {
                 }
 
                 if !errorMessage.isEmpty {
-                    Section {
-                        Text(errorMessage).foregroundColor(.red).font(.caption)
-                    }
+                    Section { Text(errorMessage).foregroundColor(.red).font(.caption) }
                 }
 
                 if !successMessage.isEmpty {
-                    Section {
-                        Text(successMessage).foregroundColor(.green).font(.caption)
-                    }
+                    Section { Text(successMessage).foregroundColor(.green).font(.caption) }
                 }
 
                 Section {
@@ -564,9 +564,7 @@ struct ChangePasscodePhraseView: View {
                         let success = json["success"] as? Bool ?? false
                         if success {
                             successMessage = json["message"] as? String ?? "Passcode Phrase updated successfully!"
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                dismiss()
-                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { dismiss() }
                         } else {
                             errorMessage = json["error"] as? String ?? "Failed to update Passcode Phrase."
                         }
@@ -577,8 +575,4 @@ struct ChangePasscodePhraseView: View {
             }
         }.resume()
     }
-}
-
-#Preview {
-    ShieldSettings()
 }

@@ -1,9 +1,12 @@
+// File Name: AppSettingsView.swift
+
 import Foundation
 import SwiftUI
 import Combine
 
 struct AppSettingsView: View {
     @AppStorage("loggedInUserId") private var loggedInUserId: Int = 1
+    @AppStorage("twilioNumber") private var callShieldNumber: String = ""
     @Environment(\.dismiss) private var dismiss
     
     // Guardian Shield State
@@ -31,135 +34,248 @@ struct AppSettingsView: View {
     @State private var showDeactivateAlert: Bool = false
     @State private var deactivatePinInput: String = ""
     
+    // Copy Clipboard Alert State
+    @State private var showCopiedAlert: Bool = false
+
     // Status Messages
     @State private var errorMessage: String?
     @State private var successMessage: String?
     @State private var isLoading: Bool = false
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color(uiColor: .systemGroupedBackground)
-                    .ignoresSafeArea()
+        ZStack {
+            Color(uiColor: .systemGroupedBackground)
+                .ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: 16) {
-                        shieldControlsCard
-                        securityManagementCard
-                        ownerPasscodeCard
-                        messageNameCard
-                        carrierManagementCard
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Status Feedback Banners
+                    if let success = successMessage {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text(success)
+                                .font(.system(size: 15, weight: .bold))
+                            Spacer()
+                        }
+                        .padding(16)
+                        .background(Color.green.opacity(0.15))
+                        .foregroundColor(.green)
+                        .cornerRadius(14)
                     }
-                    .padding(16)
-                }
-            }
-            .navigationTitle("Shield Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            
-            // --- ALERT 1: Enter PIN to Disable Shield ---
-            .alert("Disable Guardian Shield", isPresented: $showingShieldPinAlert) {
-                SecureField("Enter Current PIN", text: $togglePinInput)
-                    .keyboardType(.numberPad)
-                Button("Confirm") {
-                    updateShieldStatus(enabled: pendingShieldState, pin: togglePinInput)
-                    togglePinInput = ""
-                }
-                Button("Cancel", role: .cancel) {
-                    pendingShieldState = isShieldEnabled
-                    togglePinInput = ""
-                }
-            } message: {
-                Text("Please enter your current Guardian PIN to turn off protection.")
-            }
-             
-            // --- ALERT 2: Change PIN Dialog ---
-            .alert("Change Owner PIN", isPresented: $showingChangePinAlert) {
-                SecureField("Current PIN", text: $currentPinInput)
-                    .keyboardType(.numberPad)
-                SecureField("New 4-Digit PIN", text: $newPinInput)
-                    .keyboardType(.numberPad)
-                SecureField("Confirm New PIN", text: $confirmNewPinInput)
-                    .keyboardType(.numberPad)
-                 
-                Button("Update PIN") {
-                    validateAndUpdatePin()
-                }
-                Button("Cancel", role: .cancel) {
-                    clearPinInputs()
-                }
-            } message: {
-                Text("Enter your current PIN and your new PIN.")
-            }
 
-            // --- ALERT 3: Change Passcode Phrase Dialog ---
-            .alert("Change Passcode Phrase", isPresented: $showingPasscodeAlert) {
-                SecureField("Owner PIN", text: $passcodePinInput)
-                    .keyboardType(.numberPad)
-                TextField("New Word or Phrase", text: $newPasscodePhrase)
-                    .textInputAutocapitalization(.words)
-             
-                Button("Update Passcode") {
-                    updatePasscodeOnBackend(pin: passcodePinInput, passcode: newPasscodePhrase)
-                    passcodePinInput = ""
-                    newPasscodePhrase = ""
-                }
-                Button("Cancel", role: .cancel) {
-                    passcodePinInput = ""
-                    newPasscodePhrase = ""
-                }
-            } message: {
-                Text("Enter your Owner PIN and the new word or phrase visitors must speak.")
-            }
+                    if let error = errorMessage {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                            Text(error)
+                                .font(.system(size: 15, weight: .bold))
+                            Spacer()
+                        }
+                        .padding(16)
+                        .background(Color.red.opacity(0.15))
+                        .foregroundColor(.red)
+                        .cornerRadius(14)
+                    }
 
-            // --- ALERT 4: Update Greeting Message Name ---
-            .alert("Update Greeting Name", isPresented: $showingMessageNameAlert) {
-                TextField("e.g. Grandma Mary or Leave Blank", text: $currentMessageNameInput)
-                    .textInputAutocapitalization(.words)
+                    callShieldNumberCard
+                    shieldControlsCard
+                    securityManagementCard
+                    ownerPasscodeCard
+                    messageNameCard
+                    carrierManagementCard
+                }
+                .padding(16)
+            }
+        }
+        .navigationTitle("Shield Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: { dismiss() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .bold))
+                        Text("Back")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color(uiColor: .tertiarySystemFill))
+                    .cornerRadius(20)
+                }
+            }
+        }
+        .alert("Copied to Clipboard", isPresented: $showCopiedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Your Call Shield Number has been copied.")
+        }
+         
+        // --- ALERT 1: Enter PIN to Disable Shield ---
+        .alert("Disable Guardian Shield", isPresented: $showingShieldPinAlert) {
+            SecureField("Enter Current PIN", text: $togglePinInput)
+                .keyboardType(.numberPad)
+            Button("Confirm") {
+                updateShieldStatus(enabled: pendingShieldState, pin: togglePinInput)
+                togglePinInput = ""
+            }
+            Button("Cancel", role: .cancel) {
+                pendingShieldState = isShieldEnabled
+                togglePinInput = ""
+            }
+        } message: {
+            Text("Please enter your current Guardian PIN to turn off protection.")
+        }
+         
+        // --- ALERT 2: Change PIN Dialog ---
+        .alert("Change Owner PIN", isPresented: $showingChangePinAlert) {
+            SecureField("Current PIN", text: $currentPinInput)
+                .keyboardType(.numberPad)
+            SecureField("New 4-Digit PIN", text: $newPinInput)
+                .keyboardType(.numberPad)
+            SecureField("Confirm New PIN", text: $confirmNewPinInput)
+                .keyboardType(.numberPad)
              
-                Button("Update Name") {
-                    updateMessageNameToBackend(rawMessageName: currentMessageNameInput)
-                    currentMessageNameInput = ""
-                }
-                Button("Cancel", role: .cancel) {
-                    currentMessageNameInput = ""
-                }
-            } message: {
-                Text("Enter the name announced during call screening, or leave blank for complete privacy.")
+            Button("Update PIN") {
+                validateAndUpdatePin()
             }
+            Button("Cancel", role: .cancel) {
+                clearPinInputs()
+            }
+        } message: {
+            Text("Enter your current PIN and your new PIN.")
+        }
 
-            // --- ALERT 5: Deactivate Account ---
-            .alert("Deactivate Account", isPresented: $showDeactivateAlert) {
-                SecureField("Guardian PIN (if required)", text: $deactivatePinInput)
-                    .keyboardType(.numberPad)
-                Button("Deactivate", role: .destructive) {
-                    deactivatePinInput = ""
-                }
-                Button("Cancel", role: .cancel) {
-                    deactivatePinInput = ""
-                }
-            } message: {
-                Text("This will stop your subscription and deactivate your account. Enter your Guardian PIN if assigned.")
+        // --- ALERT 3: Change Passcode Phrase Dialog ---
+        .alert("Change Passcode Phrase", isPresented: $showingPasscodeAlert) {
+            SecureField("Owner PIN", text: $passcodePinInput)
+                .keyboardType(.numberPad)
+            TextField("New Word or Phrase", text: $newPasscodePhrase)
+                .textInputAutocapitalization(.words)
+             
+            Button("Update Passcode") {
+                updatePasscodeOnBackend(pin: passcodePinInput, passcode: newPasscodePhrase)
+                passcodePinInput = ""
+                newPasscodePhrase = ""
             }
+            Button("Cancel", role: .cancel) {
+                passcodePinInput = ""
+                newPasscodePhrase = ""
+            }
+        } message: {
+            Text("Enter your Owner PIN and the new word or phrase visitors must speak.")
+        }
+
+        // --- ALERT 4: Update Greeting Message Name ---
+        .alert("Update Greeting Name", isPresented: $showingMessageNameAlert) {
+            TextField("e.g. Grandma Mary or Leave Blank", text: $currentMessageNameInput)
+                .textInputAutocapitalization(.words)
+             
+            Button("Update Name") {
+                updateMessageNameToBackend(rawMessageName: currentMessageNameInput)
+                currentMessageNameInput = ""
+            }
+            Button("Cancel", role: .cancel) {
+                currentMessageNameInput = ""
+            }
+        } message: {
+            Text("Enter the name announced during call screening, or leave blank for complete privacy.")
+        }
+
+        // --- ALERT 5: Deactivate Account ---
+        .alert("Deactivate Account", isPresented: $showDeactivateAlert) {
+            SecureField("Guardian PIN (if required)", text: $deactivatePinInput)
+                .keyboardType(.numberPad)
+            Button("Deactivate", role: .destructive) {
+                deactivatePinInput = ""
+            }
+            Button("Cancel", role: .cancel) {
+                deactivatePinInput = ""
+            }
+        } message: {
+            Text("This will stop your subscription and deactivate your account. Enter your Guardian PIN if assigned.")
         }
     }
 
     // MARK: - Subviews for Clean Compiler Performance
 
-    private var shieldControlsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 14) {
+    private var callShieldNumberCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Call Shield Line")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 16) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color.blue.opacity(0.15))
+                        .frame(width: 48, height: 48)
+
+                    Image(systemName: "shield.fill")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 22, weight: .bold))
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Call Shield Number")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+
+                    Text(callShieldNumber.isEmpty || callShieldNumber == "null" ? "Pending Assignment" : callShieldNumber)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.primary)
+                }
+
+                Spacer()
+
+                if !callShieldNumber.isEmpty && callShieldNumber != "null" && callShieldNumber != "Pending Assignment" {
+                    Button(action: {
+                        UIPasteboard.general.string = callShieldNumber
+                        showCopiedAlert = true
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.on.doc")
+                            Text("Copy")
+                        }
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.blue)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.blue.opacity(0.15))
+                        .cornerRadius(10)
+                    }
+                }
+            }
+
+            Text("This is your dedicated protected phone line routing and screening incoming calls.")
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+        }
+        .padding(18)
+        .background(Color(.systemBackground))
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    private var shieldControlsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 16) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14)
                         .fill(isShieldEnabled ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 48, height: 48)
 
                     Image(systemName: "shield.fill")
                         .foregroundColor(isShieldEnabled ? .green : .red)
-                        .font(.title3)
+                        .font(.system(size: 22, weight: .bold))
                 }
 
                 Text("Guardian Shield Active")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.primary)
 
                 Spacer()
@@ -173,43 +289,49 @@ struct AppSettingsView: View {
                 ))
                 .labelsHidden()
                 .tint(.green)
+                .scaleEffect(1.1)
             }
 
             Text("No Guardian assigned: Account owner can turn off Guardian Shield. If Guardians, only primary Guardian can turn off Guardian Shield.")
-                .font(.system(size: 13))
+                .font(.system(size: 14))
                 .foregroundColor(.secondary)
         }
-        .padding(16)
+        .padding(18)
         .background(Color(.systemBackground))
-        .cornerRadius(16)
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+        )
     }
 
     private var securityManagementCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Security Management")
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.secondary)
 
             Button(action: {
                 showingChangePinAlert = true
             }) {
-                HStack(spacing: 14) {
+                HStack(spacing: 16) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: 14)
                             .fill(Color.blue.opacity(0.15))
-                            .frame(width: 40, height: 40)
+                            .frame(width: 46, height: 46)
 
                         Image(systemName: "key.fill")
                             .foregroundColor(.blue)
+                            .font(.system(size: 20, weight: .bold))
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Change Owner PIN")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 17, weight: .bold))
                             .foregroundColor(.primary)
 
                         Text("You must enter your current PIN to set a new security PIN.")
-                            .font(.system(size: 12))
+                            .font(.system(size: 14))
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.leading)
                     }
@@ -218,41 +340,47 @@ struct AppSettingsView: View {
 
                     Image(systemName: "chevron.right")
                         .foregroundColor(.gray)
-                        .font(.caption)
+                        .font(.system(size: 16, weight: .bold))
                 }
+                .padding(.vertical, 6)
             }
         }
-        .padding(16)
+        .padding(18)
         .background(Color(.systemBackground))
-        .cornerRadius(16)
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+        )
     }
 
     private var ownerPasscodeCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Owner Passcode")
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.secondary)
 
             Button(action: {
                 showingPasscodeAlert = true
             }) {
-                HStack(spacing: 14) {
+                HStack(spacing: 16) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: 14)
                             .fill(Color.blue.opacity(0.15))
-                            .frame(width: 40, height: 40)
+                            .frame(width: 46, height: 46)
 
                         Image(systemName: "textformat")
                             .foregroundColor(.blue)
+                            .font(.system(size: 20, weight: .bold))
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Change Passcode Phrase")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 17, weight: .bold))
                             .foregroundColor(.primary)
 
                         Text("Visitors must type the exact word or phrase to pass call screening.")
-                            .font(.system(size: 12))
+                            .font(.system(size: 14))
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.leading)
                     }
@@ -261,41 +389,47 @@ struct AppSettingsView: View {
 
                     Image(systemName: "chevron.right")
                         .foregroundColor(.gray)
-                        .font(.caption)
+                        .font(.system(size: 16, weight: .bold))
                 }
+                .padding(.vertical, 6)
             }
         }
-        .padding(16)
+        .padding(18)
         .background(Color(.systemBackground))
-        .cornerRadius(16)
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+        )
     }
 
     private var messageNameCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Greeting Announcement")
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.secondary)
 
             Button(action: {
                 showingMessageNameAlert = true
             }) {
-                HStack(spacing: 14) {
+                HStack(spacing: 16) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: 14)
                             .fill(Color.purple.opacity(0.15))
-                            .frame(width: 40, height: 40)
+                            .frame(width: 46, height: 46)
 
                         Image(systemName: "speaker.wave.2.fill")
                             .foregroundColor(.purple)
+                            .font(.system(size: 20, weight: .bold))
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Change Greeting Name")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 17, weight: .bold))
                             .foregroundColor(.primary)
 
                         Text("Customize the name announced during call screening or clear it for privacy.")
-                            .font(.system(size: 12))
+                            .font(.system(size: 14))
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.leading)
                     }
@@ -304,44 +438,51 @@ struct AppSettingsView: View {
 
                     Image(systemName: "chevron.right")
                         .foregroundColor(.gray)
-                        .font(.caption)
+                        .font(.system(size: 16, weight: .bold))
                 }
+                .padding(.vertical, 6)
             }
         }
-        .padding(16)
+        .padding(18)
         .background(Color(.systemBackground))
-        .cornerRadius(16)
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+        )
     }
 
     private var carrierManagementCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Carrier & Account Management")
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.secondary)
 
             Button(action: {
                 // Carrier re-configuration action
             }) {
-                HStack(spacing: 14) {
+                HStack(spacing: 16) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: 14)
                             .fill(Color.blue.opacity(0.15))
-                            .frame(width: 40, height: 40)
+                            .frame(width: 46, height: 46)
 
                         Image(systemName: "phone.arrow.right.fill")
                             .foregroundColor(.blue)
+                            .font(.system(size: 20, weight: .bold))
                     }
 
                     Text("Re-configure Carrier Activation")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundColor(.primary)
 
                     Spacer()
 
                     Image(systemName: "chevron.right")
                         .foregroundColor(.gray)
-                        .font(.caption)
+                        .font(.system(size: 16, weight: .bold))
                 }
+                .padding(.vertical, 6)
             }
 
             Divider()
@@ -349,27 +490,33 @@ struct AppSettingsView: View {
             Button(action: {
                 showDeactivateAlert = true
             }) {
-                HStack(spacing: 14) {
+                HStack(spacing: 16) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: 14)
                             .fill(Color.red.opacity(0.15))
-                            .frame(width: 40, height: 40)
+                            .frame(width: 46, height: 46)
 
                         Image(systemName: "trash.fill")
                             .foregroundColor(.red)
+                            .font(.system(size: 20, weight: .bold))
                     }
 
                     Text("Deactivate Account & Cancel Subscription")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundColor(.red)
 
                     Spacer()
                 }
+                .padding(.vertical, 6)
             }
         }
-        .padding(16)
+        .padding(18)
         .background(Color(.systemBackground))
-        .cornerRadius(16)
+        .cornerRadius(18)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+        )
     }
 
     // MARK: - Backend Logic & Validation
@@ -492,7 +639,6 @@ struct AppSettingsView: View {
     }
 
     private func updateMessageNameToBackend(rawMessageName: String) {
-        // Make sure domain matches your active Render host:
         guard let url = URL(string: "https://mobile-call-shield.onrender.com/api/user/update-message-name") else { return }
          
         var request = URLRequest(url: url)
@@ -523,7 +669,6 @@ struct AppSettingsView: View {
                     return
                 }
 
-                // Inspect HTTP status code safely before decoding
                 if httpResponse.statusCode == 200 {
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let msg = json["message"] as? String {
@@ -533,7 +678,6 @@ struct AppSettingsView: View {
                     }
                     errorMessage = nil
                 } else {
-                    // Safely extract error from JSON, or log raw response if HTML was returned
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let errorStr = json["error"] as? String {
                         errorMessage = errorStr

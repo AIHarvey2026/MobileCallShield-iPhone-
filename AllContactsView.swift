@@ -84,132 +84,188 @@ struct AllContactsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                // MARK: Top Action Buttons Section (Add Single & Sync All)
-                Section(header: Text("Actions")) {
-                    HStack(spacing: 24) {
-                        // 1. Add Single Button
-                        Button(action: {
-                            activeSheet = .contactPicker
-                        }) {
-                            Label("Add Single", systemImage: "person.badge.plus")
-                                .font(.subheadline)
-                        }
+            ZStack {
+                Color(uiColor: .systemGroupedBackground)
+                    .ignoresSafeArea()
 
-                        Spacer()
+                ScrollView {
+                    VStack(spacing: 20) {
+                        
+                        // MARK: - Actions Card (Large, Senior-Friendly Buttons)
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Contact Actions")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(.secondary)
 
-                        // 2. Sync All Button
-                        Button(action: {
-                            syncAllPhoneContacts()
-                        }) {
-                            HStack(spacing: 6) {
-                                Label(hasSyncedPhoneContacts ? "Synced" : "Sync All", systemImage: hasSyncedPhoneContacts ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                                    .font(.subheadline)
-                                if isSyncing {
-                                    ProgressView()
+                            HStack(spacing: 12) {
+                                // 1. Add Single Button
+                                Button(action: {
+                                    activeSheet = .contactPicker
+                                }) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "person.badge.plus")
+                                            .font(.system(size: 18, weight: .bold))
+                                        Text("Add Single")
+                                            .font(.system(size: 16, weight: .bold))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 50)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
                                 }
+
+                                // 2. Sync All Button
+                                Button(action: {
+                                    syncAllPhoneContacts()
+                                }) {
+                                    HStack(spacing: 8) {
+                                        if isSyncing {
+                                            ProgressView()
+                                                .tint(.white)
+                                        } else {
+                                            Image(systemName: hasSyncedPhoneContacts ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+                                                .font(.system(size: 18, weight: .bold))
+                                            Text(hasSyncedPhoneContacts ? "Synced" : "Sync All")
+                                                .font(.system(size: 16, weight: .bold))
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 50)
+                                    .background(hasSyncedPhoneContacts ? Color.green : Color.indigo)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                }
+                                .disabled(isSyncing)
                             }
                         }
-                        .disabled(isSyncing)
-                    }
-                    .padding(.vertical, 4)
-                }
-                
-                // MARK: Main Section - Trusted Contacts (Alphabetical)
-                Section(header: Text("Trusted Contacts")) {
-                    if isLoading {
-                        HStack {
-                            Spacer()
-                            ProgressView("Loading contacts...")
-                            Spacer()
-                        }
-                    } else if !errorMessage.isEmpty {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                    } else if sortedContacts.isEmpty {
-                        Text("No trusted contacts found.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(sortedContacts) { contact in
-                            HStack(alignment: .center, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(contact.name)
-                                        .font(.headline)
-                                        .lineLimit(1)
-                                    Text(contact.displayPhoneNumber.isEmpty ? "No phone number" : contact.displayPhoneNumber)
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
+                        .padding(18)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(18)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18)
+                                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+                        )
+
+                        // MARK: - Main Section: Trusted Contacts List
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Trusted Contacts (\(sortedContacts.count))")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(.secondary)
+
+                            if isLoading {
+                                HStack {
+                                    Spacer()
+                                    ProgressView("Loading contacts...")
+                                        .font(.system(size: 16, weight: .bold))
+                                    Spacer()
                                 }
-                                
-                                Spacer(minLength: 4)
-                                
-                                HStack(spacing: 12) {
-                                    // Guardian Toggle
-                                    VStack(spacing: 2) {
-                                        Text("Guardian")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        Toggle("Guardian", isOn: Binding(
-                                            get: { contact.isTrusted },
-                                            set: { newValue in
-                                                if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
-                                                    contacts[index].isTrusted = newValue
-                                                    
-                                                    // SAFETY RULE: If Guardian is turned off, Primary must also turn off automatically
-                                                    if !newValue && contacts[index].isPrimary {
-                                                        contacts[index].isPrimary = false
-                                                    }
-                                                }
-                                                updateGuardianStatus(contactId: contact.id, isGuardian: newValue, userId: session.userId)
+                                .padding(.vertical, 20)
+                            } else if !errorMessage.isEmpty {
+                                Text(errorMessage)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(.red)
+                            } else if sortedContacts.isEmpty {
+                                Text("No trusted contacts found.")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.secondary)
+                                    .padding(.vertical, 10)
+                            } else {
+                                VStack(spacing: 14) {
+                                    ForEach(sortedContacts) { contact in
+                                        HStack(alignment: .center, spacing: 12) {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(contact.name)
+                                                    .font(.system(size: 18, weight: .bold))
+                                                    .foregroundColor(.primary)
+                                                    .lineLimit(1)
+                                                
+                                                Text(contact.displayPhoneNumber.isEmpty ? "No phone number" : contact.displayPhoneNumber)
+                                                    .font(.system(size: 15, weight: .medium))
+                                                    .foregroundColor(.secondary)
+                                                    .lineLimit(1)
                                             }
-                                        ))
-                                        .labelsHidden()
-                                        .toggleStyle(SwitchToggleStyle(tint: .blue))
-                                    }
-                                    
-                                    // Primary Toggle (With Safety Check)
-                                    VStack(spacing: 2) {
-                                        Text("Primary")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        Toggle("Primary", isOn: Binding(
-                                            get: { contact.isPrimary },
-                                            set: { newValue in
-                                                if newValue {
-                                                    // SAFETY RULE: Must be a Guardian first. Auto-enable Guardian if needed.
-                                                    if !contact.isTrusted {
-                                                        if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
-                                                            contacts[index].isTrusted = true
+                                            
+                                            Spacer(minLength: 4)
+                                            
+                                            HStack(spacing: 14) {
+                                                // Guardian Toggle
+                                                VStack(spacing: 4) {
+                                                    Text("Guardian")
+                                                        .font(.system(size: 12, weight: .bold))
+                                                        .foregroundColor(.secondary)
+                                                    
+                                                    Toggle("Guardian", isOn: Binding(
+                                                        get: { contact.isTrusted },
+                                                        set: { newValue in
+                                                            if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+                                                                contacts[index].isTrusted = newValue
+                                                                
+                                                                if !newValue && contacts[index].isPrimary {
+                                                                    contacts[index].isPrimary = false
+                                                                }
+                                                            }
+                                                            updateGuardianStatus(contactId: contact.id, isGuardian: newValue, userId: session.userId)
                                                         }
-                                                        updateGuardianStatus(contactId: contact.id, isGuardian: true, userId: session.userId)
-                                                    }
+                                                    ))
+                                                    .labelsHidden()
+                                                    .tint(.blue)
+                                                    .scaleEffect(1.05)
+                                                }
+                                                
+                                                // Primary Toggle
+                                                VStack(spacing: 4) {
+                                                    Text("Primary")
+                                                        .font(.system(size: 12, weight: .bold))
+                                                        .foregroundColor(.secondary)
                                                     
-                                                    // Set this contact as primary and clear others locally
-                                                    for index in contacts.indices {
-                                                        contacts[index].isPrimary = (contacts[index].id == contact.id)
-                                                    }
-                                                    updatePrimaryStatus(contactId: contact.id, userId: session.userId)
-                                                } else {
-                                                    if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
-                                                        contacts[index].isPrimary = false
-                                                    }
+                                                    Toggle("Primary", isOn: Binding(
+                                                        get: { contact.isPrimary },
+                                                        set: { newValue in
+                                                            if newValue {
+                                                                if !contact.isTrusted {
+                                                                    if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+                                                                        contacts[index].isTrusted = true
+                                                                    }
+                                                                    updateGuardianStatus(contactId: contact.id, isGuardian: true, userId: session.userId)
+                                                                }
+                                                                
+                                                                for index in contacts.indices {
+                                                                    contacts[index].isPrimary = (contacts[index].id == contact.id)
+                                                                }
+                                                                updatePrimaryStatus(contactId: contact.id, userId: session.userId)
+                                                            } else {
+                                                                if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+                                                                    contacts[index].isPrimary = false
+                                                                }
+                                                            }
+                                                        }
+                                                    ))
+                                                    .labelsHidden()
+                                                    .tint(.orange)
+                                                    .scaleEffect(1.05)
                                                 }
                                             }
-                                        ))
-                                        .labelsHidden()
-                                        .toggleStyle(SwitchToggleStyle(tint: .orange))
+                                        }
+                                        .padding(.vertical, 4)
+                                        Divider()
                                     }
                                 }
                             }
-                            .padding(.vertical, 4)
                         }
+                        .padding(18)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(18)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18)
+                                .stroke(Color(.systemGray4).opacity(0.6), lineWidth: 1)
+                        )
                     }
+                    .padding(16)
                 }
             }
             .navigationTitle("Trusted Contacts")
             .navigationBarTitleDisplayMode(.inline)
-            // PRESENT CONTACT PICKER SHEET
             .sheet(item: $activeSheet) { _ in
                 ContactPicker { name, phoneNumber in
                     handleSingleContactSelection(name: name, phoneNumber: phoneNumber)
